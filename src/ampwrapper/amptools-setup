@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+from utils import DEFAULT, wrap
+import argparse
+from pathlib import Path
+
+parser = argparse.ArgumentParser(description="Setup an AmpTools environment")
+parser.add_argument("directory", help="path to AmpTools environment")
+args = parser.parse_args()
+
+directory = Path(args.directory).resolve()
+directory.mkdir(parents=True, exist_ok=True)
+env_path = directory / f".env.json"
+env_path.touch(exist_ok=True)
+(directory / "DATA").mkdir(exist_ok=True)
+(directory / "GEN").mkdir(exist_ok=True)
+(directory / "ACC").mkdir(exist_ok=True)
+(directory / "BKG").mkdir(exist_ok=True)

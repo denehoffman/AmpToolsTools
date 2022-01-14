@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+from utils import wrap, DEFAULT
+from pathlib import Path
+import configparser
+import os
+import sys
+
+env_path = Path.cwd() / ".env.json"
+if not env_path.exists():
+    print(wrap(f"No AmpTools environment found in {str(Path.cwd())}! Try initializing one with amptools-setup."))
+    sys.exit(1) 
+
+config = configparser.ConfigParser()
+config_file = Path.home() / ".amptoolstools"
+if config_file.exists():
+    config.read(config_file)
+config['DEFAULT']['Path'] = str(Path.cwd())
+
+with config_file.open("w") as config_writer:
+    config.write(config_writer)
+
+print(DEFAULT(f"The AmpTools environment located at {str(Path.cwd())} has been activated!", justify="center"))

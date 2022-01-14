@@ -1,0 +1,658 @@
+#!/usr/bin/env python3
+
+from pathlib import Path
+import argparse
+from argparse import RawTextHelpFormatter as helpformat
+import errno
+import shutil
+import os
+import sys
+import subprocess
+import re
+from datetime import datetime, timedelta
+from textwrap import TextWrapper
+from array import array
+
+needed = []
+using_PyROOT = True
+found_RCDB = True
+
+###################### Just some code to make nice output
+WIDTH = os.get_terminal_size().columns
+wrapper = TextWrapper(width=WIDTH, tabsize=4)
+spacer = TextWrapper(width=WIDTH-4, tabsize=4)
+wrap = lambda s: wrapper.fill(s)
+def center(text, c=" ", l="", r="", w=WIDTH):
+    return f"{l}{text:{c}^{w-len(l)-len(r)}}{r}"
+
+def box(lines, parts=False, shrink=False):
+    global WIDTH
+    wrapped_lines = []
+    if isinstance(lines, str):
+        lines = [lines]
+    for line in lines:
+        temp = spacer.wrap(line)
+        wrapped_lines.extend(temp)
+    w = WIDTH
+    if shrink:
+        max_line_length = max(map(len, wrapped_lines)) + 4
+        w = max_line_length
+    output_top = center(center("", c="─", l="╭", r="╮", w=w))
+    output_body = "\n".join([center(center(wrapped_line, c=" ", l="│ ", r=" │", w=w)) for wrapped_line in wrapped_lines])
+    output_end = center(center("", c="─", l="╰", r="╯", w=w))
+    if parts:
+        return output_top, output_body, output_end
+    return "\n".join([output_top, output_body, output_end])
+
+def titled_box(title, lines, parts=False, shrink=False):
+    global WIDTH
+    wrapped_lines = []
+    if isinstance(lines, str):
+        lines = [lines]
+    for line in lines:
+        temp = spacer.wrap(line)
+        wrapped_lines.extend(temp)
+    w = WIDTH
+    if shrink:
+        max_line_length = max(map(len, wrapped_lines)) + 4
+        max_line_length = max(max_line_length, len(title) + 6)
+        w = max_line_length
+    output_title = center(center("╭" + "─" * (len(title) + 2) + "╮", w=w)) + "\n"
+    output_title += center(center("│ " + title + " │", w=w)) + "\n"
+    output_title += center(center("╰" + "─" * (len(title) + 2) + "╯", c="─", l="╭", r="╮", w=w))
+    output_body = "\n".join([center(center(wrapped_line, c=" ", l="│ ", r=" │", w=w)) for wrapped_line in wrapped_lines])
+    output_end = center(center("", c="─", l="╰", r="╯", w=w))
+    if parts:
+        return output_title, output_body, output_end
+    return "\n".join([output_title, output_body, output_end])
+
+def header_box(header, lines, parts=False, shrink=False):
+    global WIDTH
+    wrapped_header_lines = spacer.wrap(header)
+    wrapped_lines = []
+    if isinstance(lines, str):
+        lines = [lines]
+    for line in lines:
+        temp = spacer.wrap(line)
+        wrapped_lines.extend(temp)
+    w = WIDTH
+    if shrink:
+        max_line_length = max(map(len, wrapped_lines)) + 4
+        max_header_length = max(map(len, wrapped_header_lines)) + 4
+        max_line_length = max(max_line_length, max_header_length)
+        w = max_line_length
+    output_title = center(center("", c="─", l="╭", r="╮", w=w)) + "\n"
+    output_title += "\n".join([center(center(wrapped_line, c=" ", l="│ ", r=" │", w=w)) for wrapped_line in wrapped_header_lines]) + "\n"
+    output_title += center(center("", c="─", l="├", r="┤", w=w))
+    output_body = "\n".join([center(center(wrapped_line, c=" ", l="│ ", r=" │", w=w)) for wrapped_line in wrapped_lines])
+    output_end = center(center("", c="─", l="╰", r="╯", w=w))
+    if parts:
+        return output_title, output_body, output_end
+    return "\n".join([output_title, output_body, output_end])
+############################################ End of unimportant code
+
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    needed.append('numpy')
+
+try:
+    from particle import Particle
+except ModuleNotFoundError:
+    needed.append('particle')
+
+try:
+    from tqdm import tqdm
+except ModuleNotFoundError:
+    needed.append('tqdm')
+
+try:
+    import ROOT
+except (ImportError, ModuleNotFoundError):
+    using_PyROOT = False
+    try:
+        import uproot
+    except ModuleNotFoundError:
+        needed.append('uproot')
+try:
+    import rcdb
+except ModuleNotFoundError:
+    found_RCDB = False
+
+if needed:
+    print(wrap("This script requires the following libraries:"))
+    print()
+    if 'numpy' in needed:
+        print("    NumPy: https://numpy.org/")
+    if 'particle' in needed:
+        print("    particle: https://github.com/scikit-hep/particle")
+    if 'tqdm' in needed:
+        print("    tqdm: https://github.com/tqdm/tqdm")
+    if 'uproot' in needed:
+        print()
+        print(wrap(f"The PyROOT library either has not been installed or has not been built for Python {sys.version_info.major}.{sys.version_info.minor}. In either case, this script can circumvent this using") + "\n" + wrap("\tuproot: https://github.com/scikit-hep/uproot4"))
+    print()
+    print(wrap("Please install the required libraries using the following command:"))
+    print(f"\n\t$ pip3 install -U {' '.join(needed)}\n")
+    exit(0)
+
+if not found_RCDB:
+    print(wrap("Could not locate the RCDB python module!"))
+    sys.exit(1)
+
+
+pol_info_S17 = {"path": Path("polarizations/S17.root").resolve(),
+                "PARA_0": 1.8,
+                "PERP_45": 47.9,
+                "PERP_90": 94.5,
+                "PARA_135": -41.6}
+                
+pol_info_S18 = {"path": Path("polarizations/S18.root").resolve(),
+                "PARA_0": 4.1,
+                "PERP_45": 48.5,
+                "PERP_90": 94.2,
+                "PARA_135": -42.4}
+
+pol_info_F18 = {"path": Path("polarizations/F18.root").resolve(),
+                "PARA_0": 3.3,
+                "PERP_45": 48.3,
+                "PERP_90": 92.9,
+                "PARA_135": -42.1}
+
+def main():
+    start_time = datetime.now()
+    parser_description = "Convert ROOT analysis trees to AmpTools flat trees"
+    parser_epilog = '''
+╭─────────────────────────────────────────────────╮
+│ Written by Nathaniel Dene Hoffman               │
+│ Carnegie Mellon University | Physics Department │
+│ December 1, 2021                                │
+╰─────────────────────────────────────────────────╯
+'''
+    welcome_string = titled_box("ROOT2AmpTools",
+                                ["Written by Nathaniel Dene Hoffman",
+                                 "Carnegie Mellon University | Physics Department",
+                                 "December 1, 2021"], shrink=True)
+
+    parser = argparse.ArgumentParser(prog="ROOT2AmpTools",
+                                     description=parser_description,
+                                     epilog=parser_epilog,
+                                     formatter_class=helpformat)
+    parser.add_argument('--version', action='version', version='%(prog)s v1.0')
+    parser.add_argument('input_path',
+                        metavar='input',
+                        help='''Directory containing either:
+1. ROOT files with run numbers in their names
+2. ROOT files with any of the following keywords
+   in their names (this will skip the merging step!)
+3. Directories whose names contain the following
+   keywords and whose contents are ROOT files
+Keywords: AMO, PARA_0, PERP_45, PERP_90, PARA_135
+
+In the case of input directories which contain a mix of the
+above formats, the program will chose a method in the given order.
+''')
+    parser.add_argument('output_path',
+                        metavar='output',
+                        help="Directory to store any output files")
+    parser.add_argument('--merge-only',
+                        action='store_true',
+                        help="Merge files by polarization without conversion")
+    parser.add_argument('--exclude',
+                        nargs='+',
+                        help='''Exclude polarizations from merging/conversion
+e.g. \"--exclude AMO PERP_45 PERP_90\" to only
+process PARA polarizations''')
+    parser.add_argument('-w', '--weight',
+                        type=float,
+                        help='''Specify a weighting factor (positive, even
+for background trees)
+Default: 1.0''',
+                        default=1.0)
+    parser.add_argument('-f',
+                        metavar='FORMAT',
+                        nargs='+',
+                        dest='format_list',
+                        type=int,
+                        help='''Specify format for final state (run without
+this option for more information)''')
+    parser.add_argument('-p', '--prefix', help="Specify output prefix")
+    parser.add_argument('--force',
+                        action='store_true',
+                        help="Force recreation of new merged ROOT files if they already exist")
+    parser.add_argument('--no-pol', action='store_true', help="Don't include energy-dependent polarization information in the beam 4-momentum")
+    args = parser.parse_args()
+    print(welcome_string)
+    print(wrap("Checking input directory..."))
+
+    args.input_path = Path(args.input_path).resolve()
+    args.output_path = Path(args.output_path).resolve()
+    if not args.input_path.is_dir():
+        print(wrap(f"ERROR! Could not locate the input directory:") + "\n\n" + wrap(f"\t{str(args.input_path)}"))
+        sys.exit(1)
+
+    # Create output directory if it doesn't exist
+    if not args.output_path.is_dir():
+        args.output_path.mkdir(parents=True)
+    
+    if not args.prefix:
+        args.prefix = "tree"
+    else:
+        args.prefix = "tree_" + args.prefix
+
+    mode = 2
+    number_regex = re.compile(".*(\d{6}).*")
+    keywords = ['AMO', 'PARA_0', 'PERP_45', 'PERP_90', 'PARA_135']
+    merged_files = []
+    if args.exclude:
+        keywords = [kw for kw in keywords if not kw in args.exclude]
+    for child in args.input_path.iterdir():
+        if (not any(keyword in child.name for keyword in keywords)
+            and number_regex.search(child.name)):
+            # if we have one file/directory without a keyword
+            # and the file has a six-digit number in it's name
+            mode = 1
+    if mode != 1:
+        # we searched all files but none have only a number
+        for child in args.input_path.iterdir():
+            if (any(keyword in child.name for keyword in keywords)
+                and child.is_file()):
+                # if we find a keyword-tagged file (not directory)
+                merged_files.append(child)
+                mode = 3
+
+    print(box("- Merging -"))
+    if mode == 1:
+        merged_files = merge_RCDB(args, keywords)
+    elif mode == 2:
+        merged_files = merge_DIRS(args, keywords)
+
+    if not args.merge_only:
+        print(box("- Converting -"))
+        final_state_indices = get_final_state(str(merged_files[0]), args.format_list)
+        for merged_file in merged_files:
+            if using_PyROOT:
+                convert_pyroot(merged_file, args, final_state_indices)
+            else:
+                convert_uproot(merged_file, args, final_state_indices)
+    end_time = datetime.now()
+    print(wrap(f"Total time: {str(end_time - start_time)}"))
+    print(box("- Complete! -"))
+    print(wrap(f"Output: {str(args.output_path)}"))
+
+def merge_RCDB(args, keywords):
+    print(wrap("Running in RCDB mode...") + "\n\n" + wrap("The program will now attempt to find the polarization of each ROOT analysis tree based on the run number in its filename and merge the files accordingly."))
+    connection = os.environ.get('RCDB_CONNECTION')
+    if not connection:
+        connection = "mysql://rcdb@hallddb.jlab.org/rcdb"
+    db = rcdb.RCDBProvider(connection)
+    input_file_numbers = []
+    input_file_paths = []
+    number_regex = re.compile(".*(\d{6}).*")
+    for child in args.input_path.iterdir():
+        match_group = number_regex.search(child.name)
+        if match_group and child.is_file():
+            input_file_numbers.append(int(match_group.group(1)))
+            input_file_paths.append(child)
+    max_run_number = max(input_file_numbers)
+    min_run_number = min(input_file_numbers)
+    query = "@status_approved"
+    if max_run_number < 40000:
+        query += " and @is_production"
+        run_period = "Spring 2017"
+        run_tag = "S17"
+    elif min_run_number >= 40000 and max_run_number < 60000:
+        query += " and @is_2018production"
+        run_period = "Spring/Fall 2018"
+        if min_run_number >= 50000:
+            run_tag = "F18"
+        else:
+            run_tag = "S18"
+    elif min_run_number > 70000:
+        query += " and @is_dirc_production"
+        run_period = "Spring/Fall 2020"
+        run_tag = "SF20"
+    else:
+        print(wrap("ERROR! Either the files are not all from the same run period, or some runs have invalid run numbers."))
+        sys.exit(1)
+    print(wrap(f"Located {len(input_file_paths)} files with run numbers between {min_run_number} and {max_run_number} ({run_period})"))
+    print()
+    print(wrap("Referencing database, this may take some time..."))
+    rcdb_runs = db.select_runs(query,
+                               run_min=min_run_number,
+                               run_max=max_run_number)
+    total_query_time = rcdb_runs.performance['preparation'] + \
+                       rcdb_runs.performance['query'] + \
+                       rcdb_runs.performance['preparation']
+    print(wrap(f"╰ Done! Total query time: {str(timedelta(seconds=total_query_time))}"))
+    print()
+    print(wrap("Tabulating run info..."))
+    rcdb_table = np.array(rcdb_runs.get_values(['polarization_angle'],
+                                               insert_run_number=True),
+                          dtype=int)
+    print(wrap(f"╰ Done! Total tabulation time: {str(timedelta(seconds=rcdb_runs.performance['tabling_values']))}"))
+    polarizations = {'AMO': -1, 'PARA_0': 0, 'PERP_45': 45, 'PERP_90': 90, 'PARA_135': 135}
+    merged_files = []
+    print()
+    print(wrap(f"Matching RCDB polarizations to files..."))
+    print()
+    for keyword in keywords:
+        files_to_merge = []
+        for input_file_path, input_file_number in zip(input_file_paths, input_file_numbers):
+            try:
+                pol = rcdb_table[rcdb_table[:, 0] == input_file_number][0, 1]
+                if pol == polarizations.get(keyword):
+                    files_to_merge.append(input_file_path)
+            except:
+                print(wrap(f"Warning! Run number {input_file_number} was not found in the database, this file has been skipped!"))
+        print(titled_box(f"Found {len(files_to_merge):7} {keyword} files", "", parts=True)[0])
+        if files_to_merge:
+            output_trees_path = args.output_path / "trees"
+            output_trees_path.mkdir(exist_ok=True, parents=True)
+            merged_output_path = output_trees_path / f"{args.prefix}_{keyword}_{run_tag}.root"
+            if not merged_output_path.exists() or args.force:
+                print("\n".join(box(f"Merging {keyword}...", parts=True)[1:]))
+                subprocess.run(['hadd', '-f', str(merged_output_path)] + \
+                                [str(file_path) for file_path in files_to_merge],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.STDOUT)
+            else:
+                print("\n".join(box("The merged file already exists in the output path, skipping merge (override with --force)", parts=True)[1:]))
+            merged_files.append(merged_output_path)
+        else:
+            print("\n".join(box("No valid files in directory! Skipping...", parts=True)[1:]))
+        print()
+    print(wrap("\tMerging Complete!"))
+    print()
+    return merged_files
+
+
+def merge_DIRS(args, keywords):
+    print(wrap("Running in DIRECTORY mode...") + "\n\n" + wrap("The program will now merge all files in all directories tagged by keywords."))
+    dirs_to_merge = []
+    for child in args.input_path.iterdir():
+        if (any(keyword in child.name for keyword in keywords)
+            and child.is_dir()):
+            dirs_to_merge.append(child)
+    run_tag_chosen = False
+    run_tags = ['S17', 'S18', 'F18']
+    run_tag = 'S17'
+    while not run_tag_chosen:
+        print(wrap("Please specify the run period of the files in this directory:") + "\n" + wrap("\t1. Spring 2017") + "\n" + wrap("\t2. Spring 2018") + "\n" + wrap("\t3. Fall 2018"))
+        choice = int(input(" (1/2/3) > "))
+        if choice in [1, 2, 3]:
+            run_tag = run_tags[choice - 1]
+            run_tag_chosen = True
+        else:
+            print(wrap(f"Error! Invalid selection: {choice}"))
+    merged_files = []
+    for directory in dirs_to_merge:
+        for kw in keywords:
+            if kw in directory.name:
+                keyword = kw
+        files_to_merge = [child for child in directory.iterdir() if child.suffix == '.root']
+        print(titled_box(f"Found {len(files_to_merge):7} {keyword} files", "", parts=True)[0])
+        if files_to_merge:
+            output_trees_path = args.output_path #/ "trees" # I think this makes sense? We don't need another subfolder for the trees.
+            output_trees_path.mkdir(exist_ok=True, parents=True)
+            merged_output_path = output_trees_path / f"{args.prefix}_{keyword}_{run_tag}.root"
+            if not merged_output_path.exists() or args.force:
+                print("\n".join(box(f"Merging {keyword}...", parts=True)[1:]))
+                subprocess.run(['hadd', '-f', str(merged_output_path)] + \
+                                [str(file_path) for file_path in files_to_merge],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.STDOUT)
+            else:
+                print("\n".join(box("The merged file already exists in the output path, skipping merge (override with --force)", parts=True)[1:]))
+            merged_files.append(merged_output_path)
+        else:
+            print("\n".join(box("No valid files in directory! Skipping...", parts=True)[1:]))
+        print()
+    print(wrap("\tMerging Complete!"))
+    return merged_files
+
+def is_thrown_pyroot(root_file):
+    tfile = ROOT.TFile.Open(root_file, "READ")
+    ttree_name = tfile.GetListOfKeys()[0].GetName()
+    tfile.Close()
+    return "Thrown" in ttree_name
+
+def get_final_state(root_file, format_list):
+    if using_PyROOT:
+        tfile = ROOT.TFile.Open(root_file, "READ")
+        ttree_name = tfile.GetListOfKeys()[0].GetName()
+        ttree = tfile.Get(ttree_name)
+        if is_thrown_pyroot(root_file):
+            for event in ttree:
+                thrown_pids = event.Thrown__PID
+                break
+            particle_names = [Particle.from_pdgid(pid).programmatic_name for pid in thrown_pids]
+            tfile.Close()
+            formatted_particle_names = particle_names
+            decaying_particle_names = []
+        else:
+            branch_names = [branch.GetName() for branch in ttree.GetListOfBranches()]
+            tfile.Close()
+            P4_branch_names = [branch_name for branch_name in branch_names if "__P4_KinFit" in branch_name]
+            particle_names = [branch_name.replace("__P4_KinFit", "") for branch_name in P4_branch_names]
+            decaying_particle_names = [particle_name for particle_name in particle_names if "Decaying" in particle_name]
+            formatted_particle_names = [particle_name.replace("Decaying", "") for particle_name in particle_names]
+    else: # uproot
+        print(wrap("The uproot feature has not yet been implemented, please build ROOT for python3 or wait for an update!"))
+        sys.exit(1)
+    if not format_list:
+        confirmed = False
+        while not confirmed:
+            print(wrap("KinFit data detected for the following particles:"))
+            max_name_length = max(map(len, formatted_particle_names))
+            particle_lines = []
+            for i, particle_name in enumerate(particle_names):
+                if (not "ComboBeam" in particle_name
+                        and not "Decaying" in particle_name):
+                    particle_lines.append(f"{particle_name + ' ':╌<{max_name_length + 3}}{i:2} ")
+            print(header_box(f"{'Particle Name':<{max_name_length + 3}} # ", particle_lines, shrink=True))
+            if decaying_particle_names:
+                print(wrap("Some decaying intermediate states were also found:"))
+                particle_lines = []
+                for i, particle_name in enumerate(particle_names):
+                    if "Decaying" in particle_name:
+                        short_name = particle_name.replace("Decaying", "")
+                        particle_lines.append(f"{short_name + ' ':╌<{max_name_length + 3}}{i:2} ")
+                print(header_box(f"{'Particle Name':<{max_name_length + 3}} # ", particle_lines, shrink=True))
+            print(wrap("Please enter the particles to be included in the final state. Enter numbers corresponding to each particle in order, separated by commas. Particle four-momentums can be combined by separating them with a \"+\".") + "\n\n" + wrap("e.g. > 1, 2 + 3, 4") + "\n" + wrap("would result in a final state of particle #1, a particle which decays into particles #2 and #3, and particle #4, in that order (check the amplitude definition for the desired order)."))
+            user_input = input(" > ").replace(" ", "")
+            final_state_string_list = user_input.split(",")
+            final_state_indices = []
+            compiled_format_string = ""
+            for final_state_string in final_state_string_list:
+                substate = list(map(int, final_state_string.split("+")))
+                final_state_indices.append(substate)
+                compiled_format_string += str(sum([2**index for index in substate])) + " "
+            print(wrap("You have selected the following final state particles:"))
+            print()
+            substate_lines = []
+            for i, substate in enumerate(final_state_indices):
+                substate_lines.append(f"{i+1}{formatted_particle_names[substate[0]]:>{max(map(len, formatted_particle_names)) + 2}}")
+                for j in substate[1:]:
+                    substate_lines.append(" " * len(str(i+1)) + f"{formatted_particle_names[j]:>{max(map(len, formatted_particle_names)) + 2}}")
+                if not i == len(final_state_indices) - 1:
+                    substate_lines.append("─" * (max(map(len, formatted_particle_names)) + 3))
+            print(box(substate_lines, shrink=True))
+            print(wrap("In the future, you can skip this step by using the following argument when running this program:"))
+            print(box(f"-f {compiled_format_string}", shrink=True))
+            confirmed = input("Confirm selection? (y/n)\n > ").lower() == 'y'
+    else:
+        final_state_indices = []
+        for final_state in format_list:
+            substate = []
+            counter = 0
+            while final_state > 0:
+                if final_state & 1:
+                    substate.append(counter)
+                final_state >>= 1
+                counter += 1
+            final_state_indices.append(substate)
+    return final_state_indices
+
+
+def convert_pyroot(input_file_path, args, final_state_indices):
+    output_file_dir_path = args.output_path / "flattrees"
+    output_file_dir_path.mkdir(parents=True, exist_ok=True)
+    output_file_path = output_file_dir_path / ("flat" + input_file_path.name)
+    pol_strings = ['AMO', 'PARA_0', 'PERP_45', 'PERP_90', 'PARA_135']
+    pol_string = 'AMO'
+    run_tags = ['S17', 'S18', 'F18']
+    run_tag = 'S17'
+    for pol, tag in zip(pol_strings, run_tags):
+        if pol in input_file_path.name:
+            pol_string = pol
+        if tag in input_file_path.name:
+            run_tag = tag
+    if not output_file_path.exists() or args.force:
+        if output_file_path.exists():
+            output_file_path.unlink() # ROOT doesn't do a good job at overwriting trees
+        tfile_in = ROOT.TFile.Open(str(input_file_path), "READ")
+        tfile_out = ROOT.TFile.Open(str(output_file_path), "RECREATE")
+        ttree_name_in = tfile_in.GetListOfKeys()[0].GetName()
+        ttree_in = tfile_in.Get(ttree_name_in)
+        ttree_out = ROOT.TTree("kin", "Kinematics")
+        n_fs = len(final_state_indices)
+        NumFinalState = array('i', [0]) # np.zeros(1, dtype=int)
+        ttree_out.Branch("NumFinalState", NumFinalState, "NumFinalState/I")
+        Weight = array('f', [0.]) # np.zeros(1, dtype=float)
+        ttree_out.Branch("Weight", Weight, "Weight/F")
+        E_Beam = array('f', [0.]) # np.zeros(1, dtype=float)
+        ttree_out.Branch("E_Beam", E_Beam, "E_Beam/F")
+        Px_Beam = array('f', [0.]) # np.zeros(1, dtype=float)
+        ttree_out.Branch("Px_Beam", Px_Beam, "Px_Beam/F")
+        Py_Beam = array('f', [0.]) # np.zeros(1, dtype=float)
+        ttree_out.Branch("Py_Beam", Py_Beam, "Py_Beam/F")
+        Pz_Beam = array('f', [0.]) # np.zeros(1, dtype=float)
+        ttree_out.Branch("Pz_Beam", Pz_Beam, "Pz_Beam/F")
+        E_FinalState = array('f', n_fs*[0.]) # np.zeros(n_fs, dtype=float)
+        ttree_out.Branch("E_FinalState", E_FinalState, "E_FinalState[NumFinalState]/F")
+        Px_FinalState = array('f', n_fs*[0.]) # np.zeros(n_fs, dtype=float)
+        ttree_out.Branch("Px_FinalState", Px_FinalState, "Px_FinalState[NumFinalState]/F")
+        Py_FinalState = array('f', n_fs*[0.]) # np.zeros(n_fs, dtype=float)
+        ttree_out.Branch("Py_FinalState", Py_FinalState, "Py_FinalState[NumFinalState]/F")
+        Pz_FinalState = array('f', n_fs*[0.]) # np.zeros(n_fs, dtype=float)
+        ttree_out.Branch("Pz_FinalState", Pz_FinalState, "Pz_FinalState[NumFinalState]/F")
+        M_FinalState = array('f', [0.]) # np.zeros(n_fs, dtype=float)
+        ttree_out.Branch("M_FinalState", M_FinalState, "M_FinalState/F")
+        branch_names = [branch.GetName() for branch in ttree_in.GetListOfBranches()]
+        P4_branch_names = [branch_name for branch_name in branch_names if "__P4_KinFit" in branch_name]
+        n_events = ttree_in.GetEntries()
+        print(wrap(f"Converting {str(input_file_path)}..."))
+        if is_thrown_pyroot(str(input_file_path)):
+            for event in tqdm(ttree_in,
+                              total=n_events,
+                              dynamic_ncols=True,
+                              unit='event'):
+                Weight[0] = args.weight
+                E_Beam[0] = event.ThrownBeam__P4.E()
+                Px_Beam[0] = event.ThrownBeam__P4.Px()
+                Py_Beam[0] = event.ThrownBeam__P4.Py()
+                Pz_Beam[0] = event.ThrownBeam__P4.Pz()
+                NumFinalState[0] = n_fs
+                P4_FS_Tot = ROOT.TLorentzVector()
+                for i, substate in enumerate(final_state_indices):
+                    P4_FinalState = getattr(event, "Thrown__P4")[substate[0]]
+                    if len(substate) > 1:
+                        for j in substate[1:]:
+                            P4_FinalState += getattr(event, "Thrown__P4")[j]
+                    if i > 0:
+                        P4_FS_Tot += P4_FinalState
+                    E_FinalState[i] = P4_FinalState.E()
+                    Px_FinalState[i] = P4_FinalState.Px()
+                    Py_FinalState[i] = P4_FinalState.Py()
+                    Pz_FinalState[i] = P4_FinalState.Pz()
+                M_FinalState[0] = P4_FS_Tot.M()
+                ttree_out.Fill()
+            tfile_out.Write()
+            tfile_in.Close()
+            tfile_out.Close()
+        else:
+            n_beam_bunches = -1
+            beam_bunch_regex = re.compile(".*_B(\d).*")
+            beam_bunch_match = beam_bunch_regex.match(ttree_name_in)
+            if beam_bunch_match:
+                n_beam_bunches = int(beam_bunch_match.group(1))
+            branch_names = [branch.GetName() for branch in ttree_in.GetListOfBranches()]
+            P4_branch_names = [branch_name for branch_name in branch_names if "__P4_KinFit" in branch_name]
+            run_number = ttree_in.RunNumber
+            if not args.no_pol:
+                pol_hists = {}
+                if run_tag == "S17":
+                    pol_info = pol_info_S17
+                elif run_tag == "S18":
+                    pol_info = pol_info_S18
+                elif run_tag == "F18":
+                    pol_info = pol_info_F18
+                else:
+                    print(wrap("Error! No polarization info for run numbers outside the range (30,000, 60,000)!") + "\n\n" + wrap("Please run with the --no-pol option!"))
+                tfile_pol_info = ROOT.TFile.Open(str(pol_info['path']))
+                pol_hists["PARA_0"] = tfile_pol_info.Get("hPol0")
+                pol_hists["PARA_0"].SetDirectory(0) # Don't close the histogram when closing the file
+                pol_hists["PERP_45"] = tfile_pol_info.Get("hPol45")
+                pol_hists["PERP_45"].SetDirectory(0)
+                pol_hists["PERP_90"] = tfile_pol_info.Get("hPol90")
+                pol_hists["PERP_90"].SetDirectory(0)
+                pol_hists["PARA_135"] = tfile_pol_info.Get("hPol135")
+                pol_hists["PARA_135"].SetDirectory(0)
+                tfile_pol_info.Close()
+            for event in tqdm(ttree_in,
+                              total=n_events,
+                              dynamic_ncols=True,
+                              unit='event'):
+                for i_combo in range(event.NumCombos):
+                    if not event.IsComboCut[i_combo]:
+                        locBeamX4 = event.ComboBeam__X4_KinFit[i_combo]
+                        locTargetX4 = event.X4_Production
+                        locRFTime = event.RFTime_Measured[i_combo]
+                        locBeamRFDeltaT = locBeamX4.E() - (locRFTime + (locBeamX4.Z() - locTargetX4.Z()) / 29.9792458)
+                        accidental_weight = -1 / (2 * n_beam_bunches) if abs(locBeamRFDeltaT) > 0.5 * 4.008 else 1
+                        if n_beam_bunches == -1:
+                            accidental_weight = 1
+                        Weight[0] = args.weight * accidental_weight
+                        E_Beam[0] = event.ComboBeam__P4_KinFit[i_combo].E()
+                        if args.no_pol:
+                            Px_Beam[0] = event.ComboBeam__P4_KinFit[i_combo].Px()
+                            Py_Beam[0] = event.ComboBeam__P4_KinFit[i_combo].Py()
+                            Pz_Beam[0] = event.ComboBeam__P4_KinFit[i_combo].Pz()
+                        else:
+                            pol_fraction = 0
+                            pol_angle_deg = 0
+                            if not pol_string == "AMO":
+                                pol_angle_deg = pol_info.get(pol_string)
+                                e_bin = pol_hists.get(pol_string).GetXaxis().FindBin(event.ComboBeam__P4_KinFit[i_combo].E())
+                                if not (e_bin == 0 or e_bin > pol_hists.get(pol_string).GetXaxis().GetNbins()):
+                                    pol_fraction = pol_hists.get(pol_string).GetBinContent(e_bin)
+                            Px_Beam[0] = pol_fraction * np.cos(pol_angle_deg * np.pi / 180) 
+                            Py_Beam[0] = pol_fraction * np.sin(pol_angle_deg * np.pi / 180) 
+                            Pz_Beam[0] = 0
+                        NumFinalState[0] = n_fs
+                        P4_FS_Tot = ROOT.TLorentzVector()
+                        for i, substate in enumerate(final_state_indices):
+                            P4_FinalState = getattr(event, P4_branch_names[substate[0]])[i_combo]
+                            if len(substate) > 1:
+                                for j in substate[1:]:
+                                    P4_FinalState += getattr(event, P4_branch_names[j])[i_combo]
+                            if i > 0:
+                                P4_FS_Tot += P4_FinalState
+                            E_FinalState[i] = P4_FinalState.E()
+                            Px_FinalState[i] = P4_FinalState.Px()
+                            Py_FinalState[i] = P4_FinalState.Py()
+                            Pz_FinalState[i] = P4_FinalState.Pz()
+                        M_FinalState[0] = P4_FS_Tot.M()
+                        ttree_out.Fill()
+            tfile_out.Write()
+            tfile_in.Close()
+            tfile_out.Close()
+
+
+def convert_uproot(input_files, args, final_state_indices):
+    print(wrap("The uproot conversion feature has not yet been implemented. Please check back later!"))
+
+
+if __name__ == "__main__":
+    main()

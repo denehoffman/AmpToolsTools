@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+import argparse
+from utils import get_environment, BOLD, wrap
+from pathlib import Path
+import shutil
+import os
+
+env_path = get_environment()
+parser = argparse.ArgumentParser()
+parser.add_argument("file", nargs="+", metavar="ROOT file", help="file(s) to add")
+type_group = parser.add_mutually_exclusive_group()
+type_group.add_argument("-d", "--data", action="store_true", help="add as data (default)")
+type_group.add_argument("-b", "--bkg", action="store_true", help="add as background")
+type_group.add_argument("-g", "--gen", action="store_true", help="add as generated/thrown MC")
+type_group.add_argument("-a", "--acc", action="store_true", help="add as accepted/reconstructed MC")
+method_group = parser.add_mutually_exclusive_group()
+method_group.add_argument("-s", "--soft", action="store_true", help="soft symlink to file (default is hard symlink)")
+method_group.add_argument("-c", "--copy", action="store_true", help="copy file rather than symlink")
+parser.add_argument("-f", "--force", action="store_true", help="force overwrite of file if it already exists in the environment")
+args = parser.parse_args()
+
+input_paths = [Path(path).resolve() for path in args.file if Path(path).suffix == ".root"]
+target_type = "DATA"
+type_string = "Data"
+if args.bkg:
+    target_type = "BKG"
+    type_string = "Background"
+elif args.gen:
+    target_type = "GEN"
+    type_string = "Generated MC"
+elif args.acc:
+    target_type = "ACC"
+    type_string = "Accepted MC"
+target_dir = env_path / target_type
+
+verbose_strings = []
+for path in input_paths:
+    if args.force:
+        if (target_dir / path.name).exists():
+            (target_dir / path.name).unlink()
+    if (target_dir / path.name).exists():
+        i = 1
+        while (target_dir / f"{path.stem}_{i}{path.suffix}").exists():
+            i += 1
+        target_path = target_dir / f"{path.stem}_{i}{path.suffix}"
+    else:
+        target_path = target_dir / path.name
+    if args.soft:
+        target_path.symlink_to(path)
+        verbose_strings.append(f"{path} --> {target_path}")
+    elif args.copy:
+        shutil.copy(path, target_path)
+        verbose_strings.append(f"{path} >=> {target_path}")
+    else:
+        os.link(path, target_path)
+        # path.link_to(target_path) # need version 3.8/newer Python version
+        # target_path.hardlink_to(path) # need version 3.10/newer Python version
+        # this is how out of date Python 3.6 is...
+        verbose_strings.append(f"{path} ==> {target_path}")
+
+print(BOLD.titlebox(f"Linking as {type_string}", "\n".join(verbose_strings), title_scale=0.3, justify="center"))

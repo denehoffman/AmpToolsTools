@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+import argparse
+from utils import file_selector, get_environment, wrap, get_binning, split_mass
+import sys
+from pathlib import Path
+import array
+import numpy as np
+import uproot
+import enlighten
+
+env_path = get_environment()
+parser = argparse.ArgumentParser()
+
+parser.add_argument("name", help="study name")
+parser.add_argument("-d", "--data", dest="DATA", nargs='+', help="path(s) to data files (optional)")
+parser.add_argument("-g", "--gen", dest="GEN", nargs='+', help="path(s) to generated MC files (optional)")
+parser.add_argument("-a", "--acc", dest="ACC", nargs='+', help="path(s) to accepted MC files (optional)")
+parser.add_argument("-b", "--bkg", dest="BKG", nargs='+', help="path(s) to background files (optional)")
+parser.add_argument("--use-background", action="store_true", help="prompt for file selector if -b/--bkg option is left blank")
+
+parser.add_argument("-n", "--nbins", type=int, help="number of bins (set to 1 for an unbinned study)")
+parser.add_argument("--low", type=float, help="lower edge for data selection")
+parser.add_argument("--high", type=float, help="lower edge for data selection")
+
+args = parser.parse_args()
+args_dict = args.__dict__
+
+study = {}
+study['directory'] = env_path / args.name
+if study['directory'].is_dir():
+    print(wrap(f"The directory {study['directory']} already exists, use a different name!"))
+    sys.exit(1)
+study['directory'].mkdir()
+study['unbinned'] = (args.nbins == 1)
+
+args_provided = [not arg is None for arg in [args.nbins, args.low, args.high]]
+if not all(args_provided):
+    if any(args_provided):
+        print(wrap("You must either supply all of the arguments for -n/--nbins, --low, and --high or leave them all blank to manually select them!"))
+        sys.exit(1)
+
+study_paths = {}
+
+for filetype in ["DATA", "GEN", "ACC"]:
+    if args_dict[filetype] is None:
+        study_paths[filetype], canceled = file_selector(env_path / filetype, multiselect=True, suffix=".root")
+        if canceled:
+            print(wrap("User canceled the operation!"))
+            sys.exit(1)
+    else:
+        study_paths[filetype] = [Path(path).resolve() for path in args_dict[filetype] if path.endswith(".root")]
+    (study['directory'] / filetype).mkdir()
+
+if args_dict["BKG"] is None:
+    if args.use_background:
+        study_paths["BKG"], canceled = file_selector(env_path / "BKG", multiselect=True, suffix=".root")
+        study["background"] = True
+        (study['directory'] / "BKG").mkdir()
+        if canceled:
+            print(wrap("User canceled the operation!"))
+            sys.exit(1)
+    else:
+        study_paths["BKG"] = None
+        study["background"] = False
+else:
+    study_paths["BKG"] = [Path(path).resolve() for path in args_dict["BKG"] if path.endswith(".root")]
+    study["background"] = True
+    (study['directory'] / "BKG").mkdir()
+
+study['paths'] = study_paths
+
+if not any(args_provided):
+    data_masses = np.array([])
+    data_weights = np.array([])
+    for data_path in study['paths']['DATA']:
+        with uproot.open(data_path) as tfile:
+            ttree = tfile['kin']
+            arrays = ttree.arrays(['M_FinalState', 'Weight'], library="pd")
+            arrays.dropna(inplace=True)
+            data_weights = np.append(data_weights, arrays['Weight'].to_numpy())
+            data_masses = np.append(data_masses, arrays['M_FinalState'].to_numpy())
+    nbins, low, high = get_binning(data_masses, data_weights)
+    study['nbins'] = nbins
+    study['low'] = low
+    study['high'] = high
+else:
+    study['nbins'] = args.nbins
+    study['low'] = args.low
+    study['high'] = args.high
+step = (study['high'] - study['low']) / study['nbins']
+study['edges'] = np.arange(study['low'], study['high'] + step, step)
+
+
+# Split data into mass bins
+filetypes = ['DATA', 'GEN', 'ACC']
+if study['background']:
+    filetypes.append('BKG')
+
+for filetype in filetypes:
+    manager = enlighten.get_manager()
+    pbar = manager.counter(total=len(study['paths'][filetype]), desc=filetype, unit='files')
+    for f in pbar(study['paths'][filetype]):
+        split_mass(f, output_dir=study['directory'] / filetype, low=study['low'], high=study['high'], nbins=study['nbins'], manager=manager)
+    pbar.close()
