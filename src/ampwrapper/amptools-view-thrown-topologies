@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+
+import ROOT
+import argparse
+from pathlib import Path
+from particle import Particle
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input", help="ROOT Thrown Tree with multiple reactions")
+    args = parser.parse_args()
+    tfile_in = ROOT.TFile.Open(str(args.input), "READ")
+    try:
+        ttree_name = tfile_in.GetListOfKeys()[0].GetName()
+        ttree_in = tfile_in.Get(ttree_name)
+        particle_lists = set()
+        for event in ttree_in:
+            event_topology = tuple(sorted([pid for pid in event.Thrown__PID]))
+            event_topology_names = tuple(sorted([Particle.from_pdgid(pid).programmatic_name for pid in event.Thrown__PID]))
+            particle_lists.add(event_topology)
+        for particle_list in particle_lists:
+            print([f"{Particle.from_pdgid(pid).programmatic_name}: {pid}" for pid in particle_list])
+    except IndexError:
+        print("No TTree Found")
+    finally:
+        tfile_in.Close()
+
+if __name__ == "__main__":
+    main()

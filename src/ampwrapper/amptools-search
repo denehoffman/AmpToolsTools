@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+
+import argparse
+from particle import Particle
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("search", help="search for particle PDG ID by name")
+    args = parser.parse_args()
+    particle_list = Particle.findall(args.search)
+    print("Name:\tPDG ID:")
+    for p in particle_list:
+        print(f"{p.name}:\t{p.pdgid}")
+
+if __name__ == "__main__":
+    main()

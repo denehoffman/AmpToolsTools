@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timedelta
 from textwrap import TextWrapper
 from array import array
+import pandas as pd
 
 needed = []
 using_PyROOT = True
@@ -140,20 +141,20 @@ if not found_RCDB:
     print(wrap("Could not locate the RCDB python module!"))
     sys.exit(1)
 
-
-pol_info_S17 = {"path": Path("polarizations/S17.root").resolve(),
+parent_dir = Path(__file__).resolve().parent
+pol_info_S17 = {"path": (parent_dir / "polarizations/S17.root").resolve(),
                 "PARA_0": 1.8,
                 "PERP_45": 47.9,
                 "PERP_90": 94.5,
                 "PARA_135": -41.6}
                 
-pol_info_S18 = {"path": Path("polarizations/S18.root").resolve(),
+pol_info_S18 = {"path": (parent_dir / "polarizations/S18.root").resolve(),
                 "PARA_0": 4.1,
                 "PERP_45": 48.5,
                 "PERP_90": 94.2,
                 "PARA_135": -42.4}
 
-pol_info_F18 = {"path": Path("polarizations/F18.root").resolve(),
+pol_info_F18 = {"path": (parent_dir / "polarizations/F18.root").resolve(),
                 "PARA_0": 3.3,
                 "PERP_45": 48.3,
                 "PERP_90": 92.9,
@@ -169,12 +170,12 @@ def main():
 │ December 1, 2021                                │
 ╰─────────────────────────────────────────────────╯
 '''
-    welcome_string = titled_box("ROOT2AmpTools",
+    welcome_string = titled_box("amptools-convert",
                                 ["Written by Nathaniel Dene Hoffman",
                                  "Carnegie Mellon University | Physics Department",
                                  "December 1, 2021"], shrink=True)
 
-    parser = argparse.ArgumentParser(prog="ROOT2AmpTools",
+    parser = argparse.ArgumentParser(prog="amptools-convert",
                                      description=parser_description,
                                      epilog=parser_epilog,
                                      formatter_class=helpformat)
@@ -204,10 +205,13 @@ above formats, the program will chose a method in the given order.
 e.g. \"--exclude AMO PERP_45 PERP_90\" to only
 process PARA polarizations''')
     parser.add_argument('-w', '--weight',
-                        type=float,
                         help='''Specify a weighting factor (positive, even
 for background trees)
-Default: 1.0''',
+Default: 1.0
+If a path is supplied, weights will be pulled from CSVs with columns of
+| EventNumber | ComboNumber | Signal Weight | ... |
+This file must have a header line with at least these column names and no
+index column. The filename must contain the run number.''',
                         default=1.0)
     parser.add_argument('-f',
                         metavar='FORMAT',
@@ -542,18 +546,14 @@ def convert_pyroot(input_file_path, args, final_state_indices):
         branch_names = [branch.GetName() for branch in ttree_in.GetListOfBranches()]
         P4_branch_names = [branch_name for branch_name in branch_names if "__P4_KinFit" in branch_name]
         n_events = ttree_in.GetEntries()
+        combo_weight = 1.0
         print(wrap(f"Converting {str(input_file_path)}..."))
-        if is_thrown_pyroot(str(input_file_path)):
+        if is_thrown_pyroot(str(input_file_path)): # thrown trees have a slightly different structure
             for event in tqdm(ttree_in,
                               total=n_events,
                               dynamic_ncols=True,
                               unit='event'):
-                Weight[0] = args.weight
-                E_Beam[0] = event.ThrownBeam__P4.E()
-                Px_Beam[0] = event.ThrownBeam__P4.Px()
-                Py_Beam[0] = event.ThrownBeam__P4.Py()
-                Pz_Beam[0] = event.ThrownBeam__P4.Pz()
-                NumFinalState[0] = n_fs
+                Weight[0] = 1.0
                 P4_FS_Tot = ROOT.TLorentzVector()
                 for i, substate in enumerate(final_state_indices):
                     P4_FinalState = getattr(event, "Thrown__P4")[substate[0]]
@@ -562,16 +562,32 @@ def convert_pyroot(input_file_path, args, final_state_indices):
                             P4_FinalState += getattr(event, "Thrown__P4")[j]
                     if i > 0:
                         P4_FS_Tot += P4_FinalState
-                    E_FinalState[i] = P4_FinalState.E()
-                    Px_FinalState[i] = P4_FinalState.Px()
-                    Py_FinalState[i] = P4_FinalState.Py()
-                    Pz_FinalState[i] = P4_FinalState.Pz()
-                M_FinalState[0] = P4_FS_Tot.M()
+                com_boost = ROOT.TLorentzRotation(P4_FS_Tot.BoostVector())
+                # it is supposed to be positive here, since we are boosting
+                # away from the beam direction to get to the COM, we would
+                # usually make the boost with -(Beam + Target).BoostVector()
+                beam = com_boost * event.Thrown_Beam__P4
+                E_Beam[0] = float(beam.E())
+                Px_Beam[0] = float(beam.Px())
+                Py_Beam[0] = float(beam.Py())
+                Pz_Beam[0] = float(beam.Pz())
+                NumFinalState[0] = n_fs
+                for i, substate in enumerate(final_state_indices):
+                    P4_FinalState = getattr(event, "Thrown__P4")[substate[0]]
+                    if len(substate) > 1:
+                        for j in substate[1:]:
+                            P4_FinalState += getattr(event, "Thrown__P4")[j]
+                    P4_FinalState_COM = com_boost * P4_FinalState
+                    E_FinalState[i] = float(P4_FinalState_COM.E())
+                    Px_FinalState[i] = float(P4_FinalState_COM.Px())
+                    Py_FinalState[i] = float(P4_FinalState_COM.Py())
+                    Pz_FinalState[i] = float(P4_FinalState_COM.Pz())
+                M_FinalState[0] = float(P4_FS_Tot.M())
                 ttree_out.Fill()
             tfile_out.Write()
             tfile_in.Close()
             tfile_out.Close()
-        else:
+        else: # if not thrown (real data or accepted MC)
             n_beam_bunches = -1
             beam_bunch_regex = re.compile(".*_B(\d).*")
             beam_bunch_match = beam_bunch_regex.match(ttree_name_in)
@@ -613,24 +629,20 @@ def convert_pyroot(input_file_path, args, final_state_indices):
                         accidental_weight = -1 / (2 * n_beam_bunches) if abs(locBeamRFDeltaT) > 0.5 * 4.008 else 1
                         if n_beam_bunches == -1:
                             accidental_weight = 1
-                        Weight[0] = args.weight * accidental_weight
-                        E_Beam[0] = event.ComboBeam__P4_KinFit[i_combo].E()
-                        if args.no_pol:
-                            Px_Beam[0] = event.ComboBeam__P4_KinFit[i_combo].Px()
-                            Py_Beam[0] = event.ComboBeam__P4_KinFit[i_combo].Py()
-                            Pz_Beam[0] = event.ComboBeam__P4_KinFit[i_combo].Pz()
-                        else:
-                            pol_fraction = 0
-                            pol_angle_deg = 0
-                            if not pol_string == "AMO":
-                                pol_angle_deg = pol_info.get(pol_string)
-                                e_bin = pol_hists.get(pol_string).GetXaxis().FindBin(event.ComboBeam__P4_KinFit[i_combo].E())
-                                if not (e_bin == 0 or e_bin > pol_hists.get(pol_string).GetXaxis().GetNbins()):
-                                    pol_fraction = pol_hists.get(pol_string).GetBinContent(e_bin)
-                            Px_Beam[0] = pol_fraction * np.cos(pol_angle_deg * np.pi / 180) 
-                            Py_Beam[0] = pol_fraction * np.sin(pol_angle_deg * np.pi / 180) 
-                            Pz_Beam[0] = 0
-                        NumFinalState[0] = n_fs
+                        try:
+                            combo_weight = float(args.weight)
+                            static_weight = True
+                        except ValueError:
+                            f = [p for p in Path(args.weight).iterdir() if str(event.RunNumber) in p.name][0]
+                            run_df = pd.read_csv(f)
+                            static_weight = False
+                        if not static_weight:
+                            try:
+                                event_df = run_df[run_df['EventNumber'] == event.EventNumber]
+                                combo_weight = event_df[event_df['ComboNumber'] == i_combo].iloc[0]['Signal Weight']
+                            except:
+                                continue # skip the ones we can't find weights for, they're either messed up or zero, in which case AmpTools gets mad if you put a bunch of zero-weight events.
+                        Weight[0] = combo_weight * accidental_weight
                         P4_FS_Tot = ROOT.TLorentzVector()
                         for i, substate in enumerate(final_state_indices):
                             P4_FinalState = getattr(event, P4_branch_names[substate[0]])[i_combo]
@@ -639,10 +651,38 @@ def convert_pyroot(input_file_path, args, final_state_indices):
                                     P4_FinalState += getattr(event, P4_branch_names[j])[i_combo]
                             if i > 0:
                                 P4_FS_Tot += P4_FinalState
-                            E_FinalState[i] = P4_FinalState.E()
-                            Px_FinalState[i] = P4_FinalState.Px()
-                            Py_FinalState[i] = P4_FinalState.Py()
-                            Pz_FinalState[i] = P4_FinalState.Pz()
+                        com_boost = ROOT.TLorentzRotation(P4_FS_Tot.BoostVector())
+                        # it is supposed to be positive here, since we are boosting
+                        # away from the beam direction to get to the COM, we would
+                        # usually make the boost with -(Beam + Target).BoostVector()
+                        beam = com_boost * event.ComboBeam__P4_KinFit[i_combo]
+                        E_Beam[0] = float(beam.E())
+                        if args.no_pol:
+                            Px_Beam[0] = float(beam.Px())
+                            Py_Beam[0] = float(beam.Py())
+                            Pz_Beam[0] = float(beam.Pz())
+                        else:
+                            pol_fraction = 0
+                            pol_angle_deg = 0
+                            if not pol_string == "AMO":
+                                pol_angle_deg = pol_info.get(pol_string)
+                                e_bin = pol_hists.get(pol_string).GetXaxis().FindBin(event.ComboBeam__P4_KinFit[i_combo].E()) # these histograms reference the lab frame beam energy
+                                if not (e_bin == 0 or e_bin > pol_hists.get(pol_string).GetXaxis().GetNbins()):
+                                    pol_fraction = pol_hists.get(pol_string).GetBinContent(e_bin)
+                            Px_Beam[0] = float(pol_fraction * np.cos(pol_angle_deg * np.pi / 180))
+                            Py_Beam[0] = float(pol_fraction * np.sin(pol_angle_deg * np.pi / 180))
+                            Pz_Beam[0] = float(0)
+                        NumFinalState[0] = n_fs
+                        for i, substate in enumerate(final_state_indices):
+                            P4_FinalState = getattr(event, P4_branch_names[substate[0]])[i_combo]
+                            if len(substate) > 1:
+                                for j in substate[1:]:
+                                    P4_FinalState += getattr(event, P4_branch_names[j])[i_combo]
+                            P4_FinalState_COM = com_boost * P4_FinalState
+                            E_FinalState[i] = float(P4_FinalState_COM.E())
+                            Px_FinalState[i] = float(P4_FinalState_COM.Px())
+                            Py_FinalState[i] = float(P4_FinalState_COM.Py())
+                            Pz_FinalState[i] = float(P4_FinalState_COM.Pz())
                         M_FinalState[0] = P4_FS_Tot.M()
                         ttree_out.Fill()
             tfile_out.Write()

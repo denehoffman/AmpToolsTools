@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import sys
+from pathlib import Path
+import numpy as np
+from simple_term_menu import TerminalMenu
+from ampwrapper.utils import HDOUBLE, get_environment, DEFAULT
+import json
+
+def main():
+    env_path = get_environment()
+    description = DEFAULT("""This script generates an AmpTools configuration file. Supply Z(L,M) amplitudes in the format L/M/R (separated by backslashes) where "R" is the reflectivity (+1, -1, or blank for both positive and negative). For example, "$ amptools-generate 0/0/+1" would produce an S-wave with positive reflectivity while "$ amptools-generate 1/-1/ 2/2/-1" would produce P-waves with M=-1 and both reflectivities and a D-wave with M=+2 and negative reflectivity. You can also leave the M space blank to generate all possible moments, so "0//" is shorthand for both positive and negative S-waves and "1//1" would generate all P-waves with positive reflectivity.""", replace_whitespace=False)
+    parser = argparse.ArgumentParser(description=description,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('amplitudes', nargs="+", help="list of amplitudes to include, formatted as L/M/R")
+    parser.add_argument('-b', '--background', action="store_true", help="use a separate set of background files")
+    parser.add_argument('-o', '--output', help="name for output configuration file")
+    parser.add_argument('--exclude-amo', action="store_true", help="include all polarizations *except* amorphous")
+    parser.add_argument('-n', '--name', help="reaction name", default="default")
+    parser.add_argument('--pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
+    parser.add_argument('--sym', action="store_true", help="symmetrize the two (non-recoil) particles (use this for identical particles)")
+    args = parser.parse_args()
+    
+    for amp in args.amplitudes:
+        if not len(amp.split("/")) == 3:
+            print(f"Improper formatting on amplitude \"{amp}\"!")
+            sys.exit(1)
+
+    reaction = args.name
+    particles = ["gamma", "proton", "p1", "p2"]
+    if args.sym:
+        particles = ["gamma", "proton", "p12", "p12"]
+    polarizations = ["AMO", "PARA_0", "PERP_45", "PERP_90", "PARA_135"]
+    pol_tags = ["_AMO", "_000", "_045", "_090", "_135"]
+    pol_angles = ["0.0", "0.0", "45.0", "90.0", "135.0"]
+    pol_values = ["0.00001", "0.3519", "0.3374", "0.3303", "0.3375"]
+    if args.exclude_amo:
+        polarizations = polarizations[1:]
+        pol_tags = pol_tags[1:]
+        pol_angles = pol_angles[1:]
+        pol_values = pol_values[1:]
+    file_types = ["DATA", "GEN", "ACC"]
+    if args.background:
+        file_types.append("BKG")
+
+    # Write Header 
+    HDOUBLE.width = 60
+    header = HDOUBLE("This is an AmpTools configuration file written by " \
+                     "amptools-generate. Modify the contents with caution--" \
+                     "amptools-fit uses @tags to replace placeholder contents " \
+                     "like file paths, seeds, and initializations.") 
+    out_string = "\n".join(["# " + line for line in header.split("\n")])
+    out_string += "\n\n"
+    out_string += f"fit {reaction}\n"
+    out_string += f"reaction {reaction} {' '.join(particles)}\n"
+
+    # Write Constants
+    if args.pol_info:
+        out_string += "\n# Constants\n"
+        for pol, polval, polang in zip(pol_tags, pol_values, pol_angles):
+            out_string += f"define polVal{pol} {polval}\n"
+            out_string += f"define polAngle{pol} {polang}\n"
+    
+    # Write Parameters
+    out_string += "\n# Parameters\n"
+    out_string += f"parameter polScale{pol_tags[0]} 1.0 fixed\n"
+    for pol in pol_tags[1:]:
+        out_string += f"parameter polScale{pol} 1.0\n"
+
+    # Write Loops
+    out_string += "\n# Loops\n"
+    reaction_loop = f"loop {reaction}"
+    scale_loop = "loop LOOPSCALE"
+    ni_loop = "loop LOOPNIFILE"
+    for pol in pol_tags:
+        reaction_loop += f" {reaction}{pol}"
+        scale_loop += f" [polScale{pol}]"
+        ni_loop += f" normint{pol}"
+    out_string += f"{reaction_loop}\n"
+    out_string += f"{scale_loop}\n"
+    out_string += f"{ni_loop}\n"
+    for file_type in file_types:
+        file_loop = f"loop LOOP{file_type}FILE"
+        for pol in pol_tags:
+            file_loop += f" @{file_type}{pol}"
+        out_string += f"{file_loop}\n"
+
+    if args.pol_info:
+        polang_loop = "loop LOOPPOLANG"
+        polval_loop = "loop LOOPPOLVAL"
+        for pol in pol_tags:
+            polang_loop += f" polAngle{pol}"
+            polval_loop += f" polVal{pol}"
+    
+    # Write Data Readers
+    out_string += "\n# Paths\n"
+    out_string += f"normintfile {reaction} LOOPNIFILE\n"
+    out_string += f"data {reaction} ROOTDataReader LOOPDATAFILE\n"
+    out_string += f"genmc {reaction} ROOTDataReader LOOPGENFILE\n"
+    out_string += f"accmc {reaction} ROOTDataReader LOOPACCFILE\n"
+    if "BKG" in file_types:
+        out_string += f"bkgnd {reaction} ROOTDataReader LOOPBKGFILE\n"
+
+    # Write Sums
+    out_string += "\n# Sums\n"
+    any_positive = False
+    any_negative = False
+    for amp in args.amplitudes:
+        refl = amp.split("/")[2]
+        any_positive = any_positive or (refl == "1" or refl == "+1" or refl == "+" or refl == "")
+        any_negative = any_negative or (refl == "-1" or refl == "-" or refl == "")
+    if any_positive:
+        out_string += f"sum {reaction} PositiveRe\n"
+        out_string += f"sum {reaction} PositiveIm\n"
+    if any_negative:
+        out_string += f"sum {reaction} NegativeRe\n"
+        out_string += f"sum {reaction} NegativeIm\n"
+
+    # Write Amplitudes
+    out_string += "\n# Amplitudes\n"
+    max_l = max([int(amp.split("/")[0]) for amp in args.amplitudes])
+    amp_dict = {}
+    for L in range(max_l + 1):
+        MRs = set()
+        for M, R in [amp.split("/")[1:] for amp in args.amplitudes if int(amp.split("/")[0]) == L]:
+            if M == "":
+                for i in range(-L, L + 1):
+                    if R == "1" or R == "+1" or R == "+" or R == "":
+                        MRs.add((i, 1))
+                    if R == "-" or R == "-1" or R == "":
+                        MRs.add((i, -1))
+            elif -L <= int(M) <= L:
+                if R == "1" or R == "+1" or R == "+" or R == "":
+                    MRs.add((int(M), +1))
+                if R == "-" or R == "-1" or R == "":
+                    MRs.add((int(M), -1))
+        amp_dict[str(L)] = list(reversed(sorted(MRs)))
+    for L, MRs in amp_dict.items():
+        for M, R in MRs:
+            for part, re in zip(["Re", "Im"], [True, False]):
+                out_string += f"amplitude {reaction}::"
+                if R > 0:
+                    out_string += "Positive"
+                else:
+                    out_string += "Negative"
+                out_string += f"{part}::AMP_{L}{M:+}{R:+} Zlm"
+                out_string += f" {L} {M:+}"
+                if re:
+                    out_string += " +1"
+                    out_string += f" {R:+}"
+                else:
+                    out_string += " -1"
+                    out_string += f" {-R:+}"
+                if args.pol_info:
+                    out_string += " LOOPPOLANG LOOPPOLVAL"
+                out_string += "\n"
+
+    # Write Initialization
+    out_string += "\n# Initialize Amplitudes\n"
+    need_pos_real = True
+    need_neg_real = True
+    for L, MRs in amp_dict.items():
+        for M, R in MRs:
+            out_string += f"initialize {reaction}::"
+            if R > 0:
+                out_string += "Positive"
+                out_string += f"Re::AMP_{L}{M:+}{R:+} polar"
+                if need_pos_real:
+                    out_string += " @uniform 0.0 real\n"
+                    need_pos_real = False
+                else:
+                    out_string += " @uniform @polaruniform\n"
+            else:
+                out_string += "Negative"
+                out_string += f"Re::AMP_{L}{M:+}{R:+} polar"
+                if need_neg_real:
+                    out_string += " @uniform 0.0 real\n"
+                    need_neg_real = False
+                else:
+                    out_string += " @uniform @polaruniform\n"
+
+    # Write Constraints
+    out_string += "\n# Constrain Amplitudes\n"
+    for L, MRs in amp_dict.items():
+        for M, R in MRs:
+            # Re <-> Im constraint
+            out_string += "constrain"
+            out_string += f" {reaction}::"
+            if R > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Re::AMP_{L}{M:+}{R:+}"
+            out_string += f" {reaction}::"
+            if R > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Im::AMP_{L}{M:+}{R:+}\n"
+            # Polarization constraint
+            out_string += "constrain"
+            out_string += f" {reaction}{pol_tags[0]}::"
+            if R > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Re::AMP_{L}{M:+}{R:+}"
+            out_string += f" {reaction}::"
+            if R > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Re::AMP_{L}{M:+}{R:+}\n"
+
+    # Write Scales
+    out_string += "\n# Scale Amplitudes\n"
+    for L, MRs in amp_dict.items():
+        for M, R in MRs:
+            out_string += "scale"
+            out_string += f" {reaction}::"
+            if R > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Re::AMP_{L}{M:+}{R:+} LOOPSCALE\n"
+    out_string += "\n\n# END OF CONFIGURATION FILE"
+
+    if args.output == None:
+        print(out_string)
+    else:
+        file_name = args.output
+        with open(env_path, 'r') as env_file:
+            env = json.load(env_file)
+        env_parent = env_path.parent
+        config_path = env_parent / "configs"
+        config_path.mkdir(exist_ok=True)
+        file_path = config_path / f"{file_name}.cfg"
+        with open(file_path, 'w') as config_file:
+            config_file.write(out_string)
+        if not "configs" in env.keys():
+            env["configs"] = dict()
+        info = {"reaction": reaction,
+                "background": args.background,
+                "pol_info": args.pol_info,
+                "path": str(file_path.resolve()),
+                "amps": amp_dict,
+                "polarizations": polarizations,
+                "file_types": file_types}
+        env["configs"][file_name] = info
+        with open(env_path, 'w') as env_file:
+            json.dump(env, env_file, indent=4)
+        print(DEFAULT(f"An AmpTools Configuration has been created and saved to {str(file_path.resolve())}. Use amptools-fit to run a fit using this configuration."))
+
+if __name__ == "__main__":
+    main()

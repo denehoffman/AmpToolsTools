@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+
+import ROOT
+import argparse
+from pathlib import Path
+from particle import Particle
+from tqdm import tqdm
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input", nargs="+", help="ROOT Thrown Tree(s) with multiple reactions")
+    parser.add_argument("-o", "--output", default="./output", help="path to output directory")
+    parser.add_argument("-t", "--topology", nargs="+", help="list of particles to include in final state (run amptools-search to find these) -- Don't forget the recoil proton!")
+    args = parser.parse_args()
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output_topology = tuple(sorted([int(pid) for pid in args.topology]))
+    print(output_topology)
+    for path in tqdm(args.input):
+        tfile_in = ROOT.TFile.Open(str(path), "READ")
+        out_path = out_dir / Path(path).name
+        tfile_out = ROOT.TFile.Open(str(out_path), "RECREATE")
+        try:
+            ttree_name = tfile_in.GetListOfKeys()[0].GetName()
+            ttree_in = tfile_in.Get(ttree_name)
+            particle_lists = set()
+            ttree_out = ttree_in.CloneTree(0)
+            for event in ttree_in:
+                event_topology = tuple(sorted([pid for pid in event.Thrown__PID]))
+                if event_topology == output_topology:
+                    ttree_out.Fill()
+            tfile_out.Write()
+        except IndexError:
+            print("No TTree Found")
+        finally:
+            tfile_out.Close()
+            tfile_in.Close()
+
+if __name__ == "__main__":
+    main()

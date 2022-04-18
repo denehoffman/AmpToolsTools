@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import json
+from ampwrapper.utils import get_environment
+import argparse
+import sys
+from pathlib import Path
+from tqdm import tqdm
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+import ROOT
+
+def main():
+    env_path = get_environment()
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    #study_keys = list(env['studies'].keys())
+    #study_name, canceled = list_selector(study_keys, title="Select a study:")
+    study_name = sys.argv[1]
+    i_bin = sys.argv[2]
+    study = env['studies'][study_name]
+    out_file = Path(study['directory']) / f"plot_angles_{i_bin}.pdf"
+    out_csv = Path(study['directory']) / f"plot_angles_{i_bin}.csv"
+    with PdfPages(out_file) as pdf:
+        print(f"Plotting Bin {i_bin}")
+        costhetas = {"GEN": [], "ACC": [], "DATA": []}
+        phis = {"GEN": [], "ACC": [], "DATA": []}
+        weights = {"GEN": [], "ACC": [], "DATA": []}
+        for tag in ["GEN", "ACC", "DATA"]:
+            print(f"Plotting {tag}")
+            files = [file_path for file_path in (Path(study['directory']) / tag).iterdir() if file_path.stem.endswith(f"_{i_bin}")]
+            for f in files:
+                tf = ROOT.TFile.Open(str(f), "READ")
+                tt_name = tf.GetListOfKeys()[0].GetName()
+                tt = tf.Get(tt_name)
+                n_events = tt.GetEntries()
+                for event in tqdm(tt, total=n_events, dynamic_ncols=True, unit='event'):
+                    beam_lab = ROOT.TLorentzVector(event.Px_Beam, event.Py_Beam, event.Pz_Beam, event.E_Beam)
+                    recoil_lab = ROOT.TLorentzVector(event.Px_FinalState[0], event.Py_FinalState[0], event.Pz_FinalState[0], event.E_FinalState[0])
+                    p1_lab = ROOT.TLorentzVector(event.Px_FinalState[1], event.Py_FinalState[1], event.Pz_FinalState[1], event.E_FinalState[1])
+                    p2_lab = ROOT.TLorentzVector(event.Px_FinalState[2], event.Py_FinalState[2], event.Pz_FinalState[2], event.E_FinalState[2])
+                    resonance_lab = p1_lab + p2_lab
+                    com = -1. * (recoil_lab + p1_lab + p2_lab)
+                    com_boost = ROOT.TLorentzRotation(-com.BoostVector())
+                    beam = com_boost * beam_lab
+                    recoil = com_boost * recoil_lab
+                    p1 = com_boost * p1_lab
+                    p2 = com_boost * p2_lab
+                    resonance = com_boost * resonance_lab
+                    res_boost = ROOT.TLorentzRotation(-resonance.BoostVector())
+                    beam_res = res_boost * beam
+                    recoil_res = res_boost * recoil
+                    p1_res = res_boost * p1
+                    z = -1. * recoil_res.Vect().Unit()
+                    y = (beam.Vect().Unit().Cross(-recoil.Vect().Unit())).Unit()
+                    x = y.Cross(z)
+                    angles = ROOT.TVector3(p1_res.Vect().Dot(x), p1_res.Vect().Dot(y), p1_res.Vect().Dot(z))
+                    costhetas[tag].append(angles.CosTheta())
+                    phis[tag].append(angles.Phi())
+                    weights[tag].append(event.Weight)
+                tf.Close()
+        fig, axes = plt.subplot_mosaic("AB", figsize=(10, 6))
+        axes["A"].hist(costhetas['GEN'], bins=20, range=(-1., 1.), weights=weights['GEN'], histtype='step')
+        axes["A"].set_xlabel(rf"GEN cos($\theta_{{HX}}$) in Bin {i_bin}")
+        axes["B"].hist(phis['GEN'], bins=20, range=(-np.pi, np.pi), weights=weights['GEN'], histtype='step')
+        axes["B"].set_xlabel(rf"GEN $\phi_{{HX}}$ in Bin {i_bin}")
+        pdf.savefig(fig)
+        plt.close()
+
+        fig, axes = plt.subplot_mosaic("AB", figsize=(10, 6))
+        axes["A"].hist(costhetas['ACC'], bins=20, range=(-1., 1.), weights=weights['ACC'], histtype='step')
+        axes["A"].set_xlabel(rf"ACC cos($\theta_{{HX}}$) in Bin {i_bin}")
+        axes["B"].hist(phis['ACC'], bins=20, range=(-np.pi, np.pi), weights=weights['ACC'], histtype='step')
+        axes["B"].set_xlabel(rf"ACC $\phi_{{HX}}$ in Bin {i_bin}")
+        pdf.savefig(fig)
+        plt.close()
+
+        fig, axes = plt.subplot_mosaic("AB", figsize=(10, 6))
+        axes["A"].hist(costhetas['DATA'], bins=20, range=(-1., 1.), weights=weights['DATA'], histtype='step')
+        axes["A"].set_xlabel(rf"DATA cos($\theta_{{HX}}$) in Bin {i_bin}")
+        axes["B"].hist(phis['DATA'], bins=20, range=(-np.pi, np.pi), weights=weights['DATA'], histtype='step')
+        axes["B"].set_xlabel(rf"DATA $\phi_{{HX}}$ in Bin {i_bin}")
+        pdf.savefig(fig)
+        plt.close()
+
+        costhetas_GEN, costheta_bins = np.histogram(costhetas['GEN'], bins=20, range=(-1., 1.), weights=weights['GEN'])
+        phis_GEN, phi_bins = np.histogram(phis['GEN'], bins=20, range=(-np.pi, np.pi), weights=weights['GEN'])
+        costhetas_ACC, _ = np.histogram(costhetas['ACC'], bins=costheta_bins)
+        phis_ACC, _ = np.histogram(phis['ACC'], bins=phi_bins)
+        costhetas_DATA, _ = np.histogram(costhetas['DATA'], bins=costheta_bins)
+        phis_DATA, _ = np.histogram(phis['DATA'], bins=phi_bins)
+        costhetas_acceptance = costhetas_ACC / costhetas_GEN
+        phis_acceptance = phis_ACC / phis_GEN
+        costheta_centers = (costheta_bins[1:] + costheta_bins[:-1]) / 2
+        phi_centers  = (phi_bins[1:] + phi_bins[:-1]) / 2
+        costhetas_DATA_acceptance = costhetas_DATA / costhetas_acceptance
+        phis_DATA_acceptance = phis_DATA / phis_acceptance
+
+        fig, axes = plt.subplot_mosaic("AB", figsize=(10, 6))
+        axes["A"].hist(costheta_centers, bins=costheta_bins, weights=costhetas_acceptance, histtype='step')
+        axes["A"].set_xlabel(rf"Acceptance cos($\theta_{{HX}}$) in Bin {i_bin}")
+        axes["B"].hist(phi_centers, bins=phi_bins, weights=phis_acceptance, histtype='step')
+        axes["B"].set_xlabel(rf"Acceptance $\phi_{{HX}}$ in Bin {i_bin}")
+        pdf.savefig(fig)
+        plt.close()
+
+        fig, axes = plt.subplot_mosaic("AB", figsize=(10, 6))
+        axes["A"].hist(costheta_centers, bins=costheta_bins, weights=costhetas_DATA_acceptance, histtype='step')
+        axes["A"].set_xlabel(rf"Acceptance corrected DATA cos($\theta_{{HX}}$) in Bin {i_bin}")
+        axes["B"].hist(phi_centers, bins=phi_bins, weights=phis_DATA_acceptance, histtype='step')
+        axes["B"].set_xlabel(rf"Acceptance corrected DATA $\phi_{{HX}}$ in Bin {i_bin}")
+        pdf.savefig(fig)
+        plt.close()
+        df = pd.DataFrame({"CosTheta": costhetas_DATA_acceptance, "Phi": phis_DATA_acceptance})
+        df.to_csv(out_csv)
+
+
+if __name__ == "__main__":
+    main()

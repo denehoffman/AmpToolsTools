@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+import numpy as np
+import json
+from simple_term_menu import TerminalMenu
+from ampwrapper.utils import get_environment, wrap, list_selector, DEFAULT
+import argparse
+import sys
+import pandas as pd
+from pathlib import Path
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+import re
+
+
+def main():
+    env_path = get_environment()
+    parser = argparse.ArgumentParser()
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    if not env.get('studies'):
+        print(wrap("You must initialize at least one AmpTools study using amptools-study!"))
+        sys.exit(1) 
+    parser.add_argument('-s', '--study', help="study name")
+    args = parser.parse_args()
+    if args.study:
+        study = env['studies'][args.study]
+        if not study.get('results'):
+            print(wrap(f"The study {args.study} has not been fit yet!"))
+            sys.exit(1)
+    else:
+        fit_studies = []
+        for study_name, study in env['studies'].items():
+            if study.get('results'):
+                fit_studies.append(study_name)
+        args.study, cancel = list_selector(fit_studies)
+        if cancel:
+            print(wrap("User cancelled operation!"))
+            sys.exit(1)
+        study = env['studies'][args.study] 
+    res_config, cancel = list_selector(study['results'])
+    if cancel:
+        sys.exit(0)
+    res_file = Path(study['directory']) / f"{res_config}_results.csv"
+    out_file = Path(study['directory']) / f"plot_{Path(res_file).stem}.pdf"
+    df = pd.read_csv(res_file)
+    centers = (np.array(study['edges'][1:]) + np.array(study['edges'][:-1]))/2
+    df['center'] = centers[df['bin']]
+    bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
+    print(df)
+    best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].max()] for bin_df in bin_dfs])
+    print(best_df)
+    ### Get amplitude info and names: ..._m.group(0) = amplitude key, group(1) = J, group(2) = M, group(3) = R, group(4) = identifier
+    amp_int_m = list(filter(None, [re.search("^AMP_(\d)([+|-]\d)([+|-]\d)(\w*)@int$", col) for col in df.columns]))
+    amp_JMs = sorted(set(([m.group(1, 2) for m in amp_int_m])))
+    with PdfPages(out_file) as pdf:
+        for JM in amp_JMs:
+            amplitudes_to_plot_m = list(sorted(filter(lambda m: m.group(1, 2) == JM, amp_int_m), key=lambda m: m.group(3)))
+            if amplitudes_to_plot_m:
+                J = int(JM[0])
+                M = int(JM[1])
+                print(f"Plotting: best J={J} M={M} histogram")
+                plt.figure(figsize=(10, 6))
+                for amp_m in amplitudes_to_plot_m:
+                    amp_name = amp_m.group(0)
+                    R = int(amp_m.group(3))
+                    plt.errorbar(best_df['center'], best_df[amp_name + "@acc"], best_df[amp_name + "@acc@err"], color=('red' if R > 0 else 'blue'), fmt='o', label=("+" if R > 0 else "-") + " Reflectivity")
+                plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int@acc'], histtype='step', color='black', label="Total")
+                plt.title(f"J = {J} M = {M}")
+                plt.ylim(ymin=0)
+                plt.legend()
+                pdf.savefig()
+                plt.close()
+        for amp_m in amp_int_m:
+            print(f"Plotting: {amp_m.group(0)} violin plot")
+            plt.figure(figsize=(10, 6))
+            data = [bin_df[amp_m.group(0) + "@acc"].to_numpy() for bin_df in bin_dfs]
+            for i, sub_data in enumerate(data):
+                if sub_data.size == 0: # all fits failed:
+                    data[i] = np.array([0])
+            totals = [bin_df['total@int@acc'].to_numpy() for bin_df in bin_dfs]
+            for i, sub_data in enumerate(totals):
+                if sub_data.size == 0: # all fits failed:
+                    totals[i] = np.array([0])
+            plt.violinplot(data, positions=centers, widths=np.diff(centers)[0]*2)
+            plt.violinplot(totals, positions=centers, widths=np.diff(centers)[0]*2) 
+            plt.title(amp_m.group(0) + "@acc")
+            plt.ylim(ymin=0)
+            pdf.savefig()
+            plt.close()
+        for amp_m in amp_int_m:
+            print(f"Plotting: {amp_m.group(0)} phase plot")
+            plt.figure(figsize=(10, 6))
+            amp_name = amp_m.group(0).replace("@int", "@amp")
+            plt.scatter(best_df['center'], np.abs(np.angle(list(map(complex, best_df[amp_name].to_numpy())))))
+            plt.title(amp_m.group(0) + " Phase")
+            # plt.ylim(-np.pi, np.pi)
+            plt.ylim(0, np.pi) # only the phase difference matters maybe?
+            pdf.savefig()
+            plt.close()
+    print(DEFAULT(f"Output saved to {out_file}"))
+
+if __name__ == "__main__":
+    main()

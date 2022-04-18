@@ -2,6 +2,7 @@ import os
 from textwrap import TextWrapper
 import configparser
 import sys
+import logging
 from pathlib import Path
 from blessed import Terminal
 from simple_term_menu import TerminalMenu
@@ -9,22 +10,23 @@ import numpy as np
 import uproot
 import pandas as pd
 import enlighten
+import json
+import ROOT
+import subprocess
 
 def get_environment():
     config_path = Path.home() / ".amptoolstools"
-    config = configparser.ConfigParser()
     if config_path.exists():
-        config.read(config_path)
-        env = config['DEFAULT']['Path']
-        return Path(env).resolve()
+        with open(config_path, 'r') as config_file:
+            config = json.load(config_file)
+        env_path = config['path']
+        return Path(env_path).resolve()
     else:
         print(wrap("No active environment found! Use amptools-setup and amptools-activate to create one!"))
         sys.exit(1)
         
 
 class Box:
-    width = os.get_terminal_size().columns
-
     def __init__(self, box: str):
         box = box.replace("\n", "")
         self.ul = box[0]
@@ -42,11 +44,15 @@ class Box:
         self.d = box[13]
         self.du = box[14]
         self.dr = box[15]
+        try:
+            self.width = os.get_terminal_size().columns
+        except:
+            self.width = 200
 
-    def __call__(self, text: str, scale=1.0, alignment="center", justify="left"):
+    def __call__(self, text: str, scale=1.0, alignment="center", justify="left", replace_whitespace=True):
         assert scale <= 1.0
-        width = int(Box.width * scale)
-        wrapper = TextWrapper(width=width - 4, tabsize=4)
+        width = int(self.width * scale)
+        wrapper = TextWrapper(width=width - 4, tabsize=4, replace_whitespace=replace_whitespace)
         wrapped_text = wrapper.fill(text)
         if justify == "center":
             wrapped_text = "\n".join(
@@ -67,11 +73,11 @@ class Box:
         else:
             print(f'Unknown justification option: "{justify}"')
         if alignment == "center":
-            spacer = int((Box.width - width) / 2)
+            spacer = int((self.width - width) / 2)
         elif alignment == "left":
             spacer = 0
         elif alignment == "right":
-            spacer = int((Box.width - width))
+            spacer = int((self.width - width))
         else:
             print(f'Unknown alignment option: "{alignment}"')
             spacer = 0
@@ -98,21 +104,22 @@ class Box:
         justify="left",
         title_alignment="center",
         title_justify="center",
+        replace_whitespace=True
     ):
         assert scale <= 1.0
         assert title_scale <= 1.0
-        width = int(Box.width * scale)
+        width = int(self.width * scale)
         title_width = int(width * title_scale)
-        wrapper = TextWrapper(width=width - 4, tabsize=4)
+        wrapper = TextWrapper(width=width - 4, tabsize=4, replace_whitespace=replace_whitespace)
         title_wrapper = TextWrapper(width=title_width - 4, tabsize=4)
         wrapped_text = wrapper.fill(text)
         wrapped_title = title_wrapper.fill(title)
         if alignment == "center":
-            spacer = int((Box.width - width) / 2)
+            spacer = int((self.width - width) / 2)
         elif alignment == "left":
             spacer = 0
         elif alignment == "right":
-            spacer = int((Box.width - width))
+            spacer = int((self.width - width))
         else:
             print(f'Unknown alignment option: "{alignment}"')
             spacer = 0
@@ -224,21 +231,22 @@ class Box:
         justify="left",
         title_alignment="center",
         title_justify="center",
+        replace_whitespace=True
     ):
         assert scale <= 1.0
         assert title_scale <= 1.0
-        width = int(Box.width * scale)
+        width = int(self.width * scale)
         title_width = int(width * title_scale)
-        wrapper = TextWrapper(width=width - 4, tabsize=4)
+        wrapper = TextWrapper(width=width - 4, tabsize=4, replace_whitespace=replace_whitespace)
         title_wrapper = TextWrapper(width=title_width - 4, tabsize=4)
         wrapped_text = wrapper.fill(text)
         wrapped_title = title_wrapper.fill(title)
         if alignment == "center":
-            spacer = int((Box.width - width) / 2)
+            spacer = int((self.width - width) / 2)
         elif alignment == "left":
             spacer = 0
         elif alignment == "right":
-            spacer = int((Box.width - width))
+            spacer = int((self.width - width))
         else:
             print(f'Unknown alignment option: "{alignment}"')
             spacer = 0
@@ -406,12 +414,14 @@ CURVED = Box(
 ╰─┴╯
 """
 )
-
-wrap = TextWrapper(width=os.get_terminal_size().columns - 4, tabsize=4).fill
+try:
+    wrap = TextWrapper(width=os.get_terminal_size().columns - 4, tabsize=4).fill
+except:
+    wrap = TextWrapper(width=200 - 4, tabsize=4).fill
 
 ######################## Histogram Preview
 
-def get_binning(data, weights=None):
+def get_binning(data, acc, weights=None, acc_weights=None):
     dbox = DOUBLE
     box = DEFAULT
     hchars = " ▁▂▃▄▅▆▇█"
@@ -452,8 +462,10 @@ def get_binning(data, weights=None):
         increment = increment_list[0]
         ### initialize histograms (one for display, one real)
         counts, binning = np.histogram(data, bins=20, range=(l_range, r_range), weights=weights)
+        counts_acc, _ = np.histogram(acc, bins=binning, weights=acc_weights)
         counts_display, _ = np.histogram(data, bins=binning, weights=weights)
         counts_unweighted, _ = np.histogram(data, bins=binning)
+        counts_acc_unweighted, _ = np.histogram(acc, bins=binning)
         ####
         n_bins = len(binning) - 1
         n_bins_display = n_bins
@@ -491,7 +503,8 @@ def get_binning(data, weights=None):
             print("   " + term.black_on_white(f" Increment: {inc_string} MeV "), end='', flush=True)
             print(term.black_on_white(" " * (draw_width - term.get_location()[1] + 4)), end='', flush=True)
             # print bin width
-            print(term.move_xy(width_origin[1], width_origin[0]) + term.black_on_white(f" Bin Width: {int(np.diff(binning)[0] * 1000)} MeV ") + "   " + term.black_on_white(f" Minimum Counts/Bin: {np.amin(counts_unweighted)} ") + "   " + term.black_on_white(" Press 'q' to confirm this selection "), end='', flush=True)
+            acc_to_data_ratios = counts_acc_unweighted / counts_unweighted
+            print(term.move_xy(width_origin[1], width_origin[0]) + term.black_on_white(f" Bin Width: {int(np.diff(binning)[0] * 1000)} MeV ") + "   " + term.black_on_white(f" Minimum Counts/Bin: {np.amin(counts_unweighted)} | Minimum ACC/DATA: {np.amin(acc_to_data_ratios):.2f} (Goal is > 10) ") + "   " + term.black_on_white(" Press 'q' to confirm this selection "), end='', flush=True)
             print(term.home)
             key_pressed = term.inkey()
             if key_pressed == 'n':
@@ -535,7 +548,9 @@ def get_binning(data, weights=None):
             # Regenerate histograms with new binning info
             counts_display, _ = np.histogram(data, bins=n_bins_display, range=(l_range, r_range), weights=weights)
             counts, binning = np.histogram(data, bins=n_bins, range=(l_range, r_range), weights=weights)
+            counts_acc, _ = np.histogram(acc, bins=n_bins, range=(l_range, r_range), weights=acc_weights)
             counts_unweighted, _ = np.histogram(data, bins=n_bins, range=(l_range, r_range))
+            counts_acc_unweighted, _ = np.histogram(acc, bins=n_bins, range=(l_range, r_range))
         print(term.clear)
         return n_bins, l_range, r_range
 
@@ -561,13 +576,71 @@ def file_selector(root=Path.cwd(), multiselect=False, suffix=""):
             cycle_cursor=True,
             clear_screen=True,
             cursor_index=1)
-    selected_indices = menu.show()
-    selected_paths = [Path(files[ind - 1].resolve()) for ind in selected_indices if ind != 0]
-    # returns (selection list, T/F was "Cancel" selected?)
-    return selected_paths, 0 in selected_indices
+    if multiselect:
+        selected_indices = menu.show()
+        selected_paths = [str(files[ind - 1].resolve()) for ind in selected_indices if ind != 0]
+        # returns (selection list, T/F was "Cancel" selected?)
+        return selected_paths, 0 in selected_indices
+    else:
+        selected_index = menu.show()
+        if selected_index == 0:
+            selected_path = None
+        else:
+            selected_path = str(files[selected_index - 1])
+        return selected_path, selected_index == 0
 
+def list_selector(selections, title="Select an option", multiselect=False):
+    options = ["Cancel"] + selections
+    menu = TerminalMenu(
+            menu_entries=options,
+            title=title,
+            menu_cursor="► ",
+            menu_cursor_style=("fg_red", "bold"),
+            menu_highlight_style=("standout",),
+            multi_select=multiselect,
+            show_multi_select_hint=multiselect,
+            cycle_cursor=True,
+            clear_screen=True,
+            cursor_index=1)
+    if multiselect:
+        selected_indices = menu.show()
+        selected_items = [selections[ind - 1] for ind in selected_indices if ind != 0]
+        # returns (selection list, T/F was "Cancel" selected?)
+        return selected_items, 0 in selected_indices
+    else:
+        selected_index = menu.show()
+        if selected_index == 0:
+            selected_item = None
+        else:
+            selected_item = str(selections[selected_index - 1])
+        return selected_item, selected_index == 0
 
 def split_mass(flattree: Path, output_dir: Path, low: float, high: float, nbins: int, manager):
+    tfile_in = ROOT.TFile.Open(str(flattree), "READ")
+    ttree_in = tfile_in.Get('kin')
+    bin_edges = np.linspace(low, high, nbins+1)
+    pbar = manager.counter(total=nbins, desc=flattree.stem, unit='bin', leave=False)
+    for ibin in pbar(range(nbins)):
+        output_path = output_dir / (flattree.stem + f"_{ibin}.root")
+        if output_path.exists():
+            output_path.unlink() # delete existing output (overwrite)
+        tfile_out = ROOT.TFile.Open(str(output_path), "RECREATE")
+        ttree_out = ttree_in.CloneTree(0)
+        for event in ttree_in:
+            if bin_edges[ibin] < event.M_FinalState < bin_edges[ibin + 1]:
+                ttree_out.Fill()
+        tfile_out.Write()
+        tfile_out.Close()
+    tfile_in.Close()
+
+def split_mass_halld_sim(flattree: Path, output_dir: Path, low: float, high: float, nbins: int, manager):
+    home = os.getcwd()
+    os.chdir(output_dir)
+    subprocess.run(["split_mass", str(flattree), flattree.stem, str(low), str(high), str(nbins)])
+    os.chdir(home)
+                    
+
+def split_mass_broken(flattree: Path, output_dir: Path, low: float, high: float, nbins: int, manager):
     with uproot.open(flattree) as tfile:
         ttree = tfile['kin']
         # using library='df' results in a double-indexed dataframe
@@ -584,4 +657,20 @@ def split_mass(flattree: Path, output_dir: Path, low: float, high: float, nbins:
         # create output file
         with uproot.recreate(output_path) as tfile_out:
             tfile_out['kin'] = bin_df
+            tfile_out['kin'].show()
     pbar.close()
+
+def check_SLURM(job_names):
+    if not isinstance(job_names, list):
+        job_names = [job_names]
+    n_jobs_in_queue = len(subprocess.run(['squeue', '-h', '-u', os.getlogin(), f"--name={','.join(job_names)}"], stdout=subprocess.PIPE).stdout.decode('utf-8').splitlines())
+    n_jobs_running = len(subprocess.run(['squeue', '-h', '-u', os.getlogin(), '-t', 'running', f"--name={','.join(job_names)}"], stdout=subprocess.PIPE).stdout.decode('utf-8').splitlines())
+    return n_jobs_running, n_jobs_in_queue
+
+def get_logger():
+    logger = logging.getLogger()
+    stream_handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter("[%(levelname)s] %(asctime)s - %(name)s - %(message)s")
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+    return logger
