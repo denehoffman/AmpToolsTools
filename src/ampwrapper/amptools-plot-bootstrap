@@ -60,7 +60,9 @@ def main():
     bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     fit_bin_dfs = [fit_df.loc[fit_df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].max()] for bin_df in bin_dfs])
+    best_df = best_df.drop_duplicates(subset=['bin'])
     best_fit_df = pd.concat([fit_bin_df[fit_bin_df['likelihood'] == fit_bin_df['likelihood'].max()] for fit_bin_df in fit_bin_dfs])
+    best_fit_df = best_fit_df.drop_duplicates(subset=['bin'])
     ### Get amplitude info and names: ..._m.group(0) = amplitude key, group(1) = J, group(2) = M, group(3) = R
     amp_int_m = list(filter(None, [re.search("^AMP_(\d)([+|-]\d)([+|-]\d)(\w*)@int$", col) for col in df.columns]))
     # Add errors from bootstrap to each amplitude

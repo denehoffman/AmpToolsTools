@@ -49,6 +49,8 @@ def main():
     print(df)
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].max()] for bin_df in bin_dfs])
     print(best_df)
+    best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
+    print(best_df)
     ### Get amplitude info and names: ..._m.group(0) = amplitude key, group(1) = J, group(2) = M, group(3) = R, group(4) = identifier
     amp_int_m = list(filter(None, [re.search("^AMP_(\d)([+|-]\d)([+|-]\d)(\w*)@int$", col) for col in df.columns]))
     amp_JMs = sorted(set(([m.group(1, 2) for m in amp_int_m])))
@@ -91,12 +93,22 @@ def main():
             print(f"Plotting: {amp_m.group(0)} phase plot")
             plt.figure(figsize=(10, 6))
             amp_name = amp_m.group(0).replace("@int", "@amp")
-            plt.scatter(best_df['center'], np.abs(np.angle(list(map(complex, best_df[amp_name].to_numpy())))))
+            best_data = best_df[["center", amp_name]].astype({amp_name: complex})
+            plt.scatter(best_data["center"], np.abs(np.angle(best_data[amp_name])))
             plt.title(amp_m.group(0) + " Phase")
             # plt.ylim(-np.pi, np.pi)
             plt.ylim(0, np.pi) # only the phase difference matters maybe?
             pdf.savefig()
             plt.close()
+        print("Plotting Likelihood Standard Deviation")
+        plt.figure(figsize=(10, 6))
+        data = np.array([[center, bin_df['likelihood'].std()] for center, bin_df in zip(centers, bin_dfs)])
+        ax = plt.gca()
+        ax.scatter(data[:,0], data[:,1])
+        ax.set_yscale('log')
+        plt.title(r"Likelihood $\sigma$")
+        pdf.savefig()
+        plt.close()
     print(DEFAULT(f"Output saved to {out_file}"))
 
 if __name__ == "__main__":
