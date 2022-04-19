@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--skip-fit", action="store_true", help="skip fitting and just collect available results from any previous fits")
     parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
     args = parser.parse_args()
-    np.random.seed(int(args.seed))
+    # np.random.seed(int(args.seed)) move this down
     queue = queues[args.queue]
     # Validation
     if args.study:
@@ -97,6 +97,7 @@ def main():
                 max_it = -1
             iterations = list(range(max_it + 1, max_it + 1 + args.iterations))
         for i_it in iterations:
+            np.random.seed(int(args.seed) + i_it) # now the seeds will be different with --append
             it_path = bin_path / str(i_it)
             it_path.mkdir(exist_ok=True)
             # Copy configuration file

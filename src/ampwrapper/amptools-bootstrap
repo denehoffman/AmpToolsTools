@@ -50,7 +50,6 @@ def main():
         if not (args.gen or args.acc):
             print(wrap("You must select at least one bootstrapping option between --gen or --acc if you choose --no-data!"))
             sys.exit(1)
-    np.random.seed(int(args.seed))
     queue = queues[args.queue]
 
     # Validation
@@ -107,6 +106,7 @@ def main():
     df = pd.read_csv(res_file)
     bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].max()] for bin_df in bin_dfs])
+    best_df = best_df.drop_duplicates(subset=['bin'])
     # Make sure there *is* a best fit in each bin
     missing_bins = set(range(study['nbins'])) - set(best_df['bin'])
     if missing_bins:
@@ -126,6 +126,7 @@ def main():
             iterations = list(range(max_it + 1, max_it + 1 + args.iterations))
         best_fit_iteration = int(best_df.loc[best_df['bin'] == i_bin]['iteration'])
         for i_it in iterations:
+            np.random.seed(int(args.seed) + i_it)
             it_path = bin_path / str(i_it)
             it_path.mkdir(exist_ok=True)
             # Copy configuration file
