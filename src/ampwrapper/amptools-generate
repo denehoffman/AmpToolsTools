@@ -88,7 +88,7 @@ def main():
             file_loop += f" @{file_type}{pol}"
         out_string += f"{file_loop}\n"
 
-    if args.pol_info:
+    if args.add_pol_info:
         polang_loop = "loop LOOPPOLANG"
         polval_loop = "loop LOOPPOLVAL"
         for pol in pol_tags:
@@ -158,7 +158,7 @@ def main():
                 else:
                     out_string += " -1"
                     out_string += f" {-R:+}"
-                if args.pol_info:
+                if args.add_pol_info:
                     out_string += " LOOPPOLANG LOOPPOLVAL"
                 out_string += "\n"
                 if len(tag.split('@')) > 1:
