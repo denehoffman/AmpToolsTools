@@ -41,15 +41,15 @@ def main():
     res_config, cancel = list_selector(study['results'])
     if cancel:
         sys.exit(0)
-    res_file = Path(study['directory']) / f"{res_config}_results.csv"
-    out_file = Path(study['directory']) / f"plot_{Path(res_file).stem}.pdf"
+    res_file = Path(study['directory']) / f"{res_config}_results_chain.csv"
+    out_file = Path(study['directory']) / f"plot_{Path(res_file).stem}_chain.pdf"
     df = pd.read_csv(res_file)
     centers = (np.array(study['edges'][1:]) + np.array(study['edges'][:-1]))/2
     df['center'] = centers[df['bin']]
     df = df.astype({column: complex for column in df.columns if column.endswith("@amp")})
     bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     print(df)
-    best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
+    best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].max()] for bin_df in bin_dfs])
     print(best_df)
     best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
     print(best_df)
@@ -101,6 +101,7 @@ def main():
             plt.ylim(0, np.pi) # only the phase difference matters maybe?
             pdf.savefig()
             plt.close()
+        """
         for i_bin in range(study['nbins']):
             bin_df = bin_dfs[i_bin]
             best_row = best_df.loc[best_df['bin'] == i_bin]
@@ -131,6 +132,7 @@ def main():
                 plt.tight_layout()
                 pdf.savefig(fig)
                 plt.close()
+        """
         print("Plotting Likelihood Standard Deviation")
         plt.figure(figsize=(10, 6))
         data = np.array([[center, bin_df['likelihood'].std()] for center, bin_df in zip(centers, bin_dfs)])

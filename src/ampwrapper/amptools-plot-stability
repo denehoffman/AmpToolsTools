@@ -42,17 +42,27 @@ def main():
     if cancel:
         sys.exit(0)
     res_file = Path(study['directory']) / f"{res_config}_results.csv"
-    out_file = Path(study['directory']) / f"plot_{Path(res_file).stem}.pdf"
+    sta_file = Path(study['directory']) / f"{res_config}_results_stability.csv"
+    out_file = Path(study['directory']) / f"plot_{Path(res_file).stem}_stability.pdf"
     df = pd.read_csv(res_file)
+    df_s = pd.read_csv(sta_file)
+    mu = []
+    sigma = []
+    for i, row in df.iterrows():
+        mu.append(df_s[(df_s['bin'] == row['bin']) & (df_s['iteration'] == row['iteration'])]['AMP_0+0+1@int'].mean())
+        sigma.append(df_s[(df_s['bin'] == row['bin']) & (df_s['iteration'] == row['iteration'])]['AMP_0+0+1@int'].std())
+    df['mu'] = mu
+    df['sigma'] = sigma
+    df['abs_t'] = np.abs((df['AMP_0+0+1@int'] - df['mu']) / df['sigma'])
     centers = (np.array(study['edges'][1:]) + np.array(study['edges'][:-1]))/2
     df['center'] = centers[df['bin']]
     df = df.astype({column: complex for column in df.columns if column.endswith("@amp")})
     bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     print(df)
-    best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
-    print(best_df)
+    best_df_l = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
+    best_df = pd.concat([bin_df[bin_df['abs_t'] == bin_df['abs_t'].min()] for bin_df in bin_dfs])
+    best_df_l = best_df_l.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
     best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
-    print(best_df)
     ### Get amplitude info and names: ..._m.group(0) = amplitude key, group(1) = J, group(2) = M, group(3) = R, group(4) = identifier
     amp_int_m = list(filter(None, [re.search("^AMP_(\d)([+|-]\d)([+|-]\d)(\w*)@int$", col) for col in df.columns]))
     amp_JMs = sorted(set(([m.group(1, 2) for m in amp_int_m])))
@@ -76,6 +86,7 @@ def main():
                 plt.close()
         for amp_m in amp_int_m:
             print(f"Plotting: {amp_m.group(0)} violin plot")
+            amp_name = amp_m.group(0)
             plt.figure(figsize=(10, 6))
             data = [bin_df[amp_m.group(0) + "@acc"].to_numpy() for bin_df in bin_dfs]
             for i, sub_data in enumerate(data):
@@ -87,6 +98,8 @@ def main():
                     totals[i] = np.array([0])
             plt.violinplot(data, positions=centers, widths=np.diff(centers)[0]*2)
             plt.violinplot(totals, positions=centers, widths=np.diff(centers)[0]*2) 
+            plt.scatter(best_df['center'], best_df[amp_name + "@acc"], color=('red' if R > 0 else 'blue'), marker='o', label=("+" if R > 0 else "-") + " Reflectivity")
+            plt.scatter(best_df_l['center'], best_df_l[amp_name + "@acc"], color=('red' if R > 0 else 'blue'), marker='x', label=("+" if R > 0 else "-") + " Reflectivity")
             plt.title(amp_m.group(0) + "@acc")
             plt.ylim(ymin=0)
             pdf.savefig()
