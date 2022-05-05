@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 from ampwrapper.utils import wrap, DEFAULT
+import argparse
 from pathlib import Path
 import json
 import os
 import logging
 import sys
 
-def setup() -> None:
+def setup(directory) -> None:
     """
     Creates a directory for AmpTools studies which includes a
     (hidden) environment file which handles variables shared
     across analyses, as well as subdirectories for storing data
     """
-    directory = Path.cwd()
     directory.mkdir(parents=True, exist_ok=True)
     env_path = directory / f".env.json"
     with open(env_path, 'w') as env_file:
@@ -31,9 +31,13 @@ def main() -> None:
     and link files without having to always be in the environment
     directory or remember paths.
     """
-    env_path = (Path.cwd() / ".env.json").resolve()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--directory", default=str(Path.cwd()), help="(optional) path to new environment directory (default is current directory)")
+    args = parser.parse_args()
+    directory = Path(args.directory)
+    env_path = (directory / ".env.json").resolve()
     if not env_path.exists():
-        print(wrap(f"No AmpTools environment found in {str(Path.cwd())}! Creating one now!"))
+        print(wrap(f"No AmpTools environment found in {str(directory)}! Creating one now!"))
         setup()
 
     config_path = Path.home() / ".amptoolstools"
@@ -46,7 +50,7 @@ def main() -> None:
     with open(config_path, 'w') as config_file:
         json.dump(config, config_file)
 
-    print(DEFAULT(f"The AmpTools environment located at {str(Path.cwd())} has been activated!", justify="center"))
+    print(DEFAULT(f"The AmpTools environment located at {str(directory)} has been activated!", justify="center"))
 
 if __name__ == "__main__":
     main()
