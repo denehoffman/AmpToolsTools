@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+
+import json
+import argparse
+from pathlib import Path
+import subprocess
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input", help="input JSON file to turn into amptools-generate command")
+    parser.add_argument("-n", "--name", default="default", help="reaction name")
+    parser.add_argument('-o', '--output', help="name for output configuration file")
+    parser.add_argument('--amo', action="store_true", help="include amorphous runs")
+    parser.add_argument('--sym', action="store_true", help="symmetrize the two (non-recoil) particles (use this for identical particles)")
+    parser.add_argument('--add-pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
+    parser.add_argument('-b', '--background', action="store_true", help="use a separate set of background files")
+    args = parser.parse_args()
+    inpath = Path(args.input)
+    with open(inpath) as injson:
+        indict = json.load(injson)
+    outstring = f"amptools-generate{' --sym' if args.sym else ''}{' --no-amo' if args.amo else ''}{' --add-pol-info' if args.add_pol_info else ''}{' --background' if args.background else ''} --name {args.name}"
+    for key, item in indict.items():
+        if item['enabled']:
+            if item['amp'] == 'BreitWigner':
+                outstring += f" {item['L']}/{item['M']}/{item['R']}@{key}@BreitWigner@{item['mass']}@{item['width']}@{item['L']}@2@3"
+            elif item['amp'] == 'Flatte':
+                outstring += f" {item['L']}/{item['M']}/{item['R']}@{key}@Flatte@{item['mass']}@{item['g1']}@{item['g2']}@2@3@0.497611@0.497611@0.547862@0.1349768@1 "
+            else:
+                outstring += f" {item['L']}/{item['M']}/{item['R']}@{key}"
+    outstring += " --output "
+    if args.output == None:
+        print("\n" + outstring + "\n")
+    else:
+        subprocess.run(outstring.split() + [args.output])
+
+if __name__ == "__main__":
+    main()

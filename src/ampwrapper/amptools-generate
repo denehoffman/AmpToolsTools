@@ -10,15 +10,15 @@ import json
 
 def main():
     env_path = get_environment()
-    description = DEFAULT("""This script generates an AmpTools configuration file. Supply Z(L,M) amplitudes in the format L/M/R (separated by backslashes) where "R" is the reflectivity (+1, -1, or blank for both positive and negative). For example, "$ amptools-generate 0/0/+1" would produce an S-wave with positive reflectivity while "$ amptools-generate 1/-1/ 2/2/-1" would produce P-waves with M=-1 and both reflectivities and a D-wave with M=+2 and negative reflectivity. You can also leave the M space blank to generate all possible moments, so "0//" is shorthand for both positive and negative S-waves and "1//1" would generate all P-waves with positive reflectivity.""", replace_whitespace=False)
+    description = DEFAULT("""This script generates an AmpTools configuration file. Supply Z(L,M) amplitudes in the format L/M/R (separated by backslashes) where "R" is the reflectivity (+1, -1, or blank for both positive and negative). For example, "$ amptools-generate 0/0/+1" would produce an S-wave with positive reflectivity while "$ amptools-generate 1/-1/ 2/2/-1" would produce P-waves with M=-1 and both reflectivities and a D-wave with M=+2 and negative reflectivity. You can also leave the M space blank to generate all possible moments, so "0//" is shorthand for both positive and negative S-waves and "1//1" would generate all P-waves with positive reflectivity. Optionally, one may add a tag onto a particular amplitude or set of amplitudes with L/M/R@TAG. The tag can also be formatted as @ampname@Amplitude@argument@argument... to include a named amplitude (for mass-dependent fits). For instance, 2/1/1@f21270@BreitWigner@1.2755@0.1867@2@2@3 would generate a Breit-Wigner with a 1275.5 MeV mass and 186.7 MeV width (the last three arguments are spin and the index of the daughter particles).""", replace_whitespace=False)
     parser = argparse.ArgumentParser(description=description,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('amplitudes', nargs="+", help="list of amplitudes to include, formatted as L/M/R")
     parser.add_argument('-b', '--background', action="store_true", help="use a separate set of background files")
     parser.add_argument('-o', '--output', help="name for output configuration file")
-    parser.add_argument('--exclude-amo', action="store_true", help="include all polarizations *except* amorphous")
+    parser.add_argument('--amo', action="store_true", help="include amorphous runs")
     parser.add_argument('-n', '--name', help="reaction name", default="default")
-    parser.add_argument('--pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
+    parser.add_argument('--add-pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
     parser.add_argument('--sym', action="store_true", help="symmetrize the two (non-recoil) particles (use this for identical particles)")
     args = parser.parse_args()
     
@@ -35,7 +35,7 @@ def main():
     pol_tags = ["_AMO", "_000", "_045", "_090", "_135"]
     pol_angles = ["0.0", "0.0", "45.0", "90.0", "135.0"]
     pol_values = ["0.00001", "0.3519", "0.3374", "0.3303", "0.3375"]
-    if args.exclude_amo:
+    if not args.amo:
         polarizations = polarizations[1:]
         pol_tags = pol_tags[1:]
         pol_angles = pol_angles[1:]
@@ -51,12 +51,14 @@ def main():
                      "amptools-fit uses @tags to replace placeholder contents " \
                      "like file paths, seeds, and initializations.") 
     out_string = "\n".join(["# " + line for line in header.split("\n")])
+    out_string += "\n# Code for generating this file:\n# amptools-generate "
+    out_string += " ".join(sys.argv[1:])
     out_string += "\n\n"
     out_string += f"fit {reaction}\n"
     out_string += f"reaction {reaction} {' '.join(particles)}\n"
 
     # Write Constants
-    if args.pol_info:
+    if args.add_pol_info:
         out_string += "\n# Constants\n"
         for pol, polval, polang in zip(pol_tags, pol_values, pol_angles):
             out_string += f"define polVal{pol} {polval}\n"
@@ -107,7 +109,7 @@ def main():
     any_positive = False
     any_negative = False
     for amp in args.amplitudes:
-        refl = amp.split("/")[2]
+        refl = amp.split("/")[2].split("@")[0]
         any_positive = any_positive or (refl == "1" or refl == "+1" or refl == "+" or refl == "")
         any_negative = any_negative or (refl == "-1" or refl == "-" or refl == "")
     if any_positive:
@@ -122,29 +124,33 @@ def main():
     max_l = max([int(amp.split("/")[0]) for amp in args.amplitudes])
     amp_dict = {}
     for L in range(max_l + 1):
-        MRs = set()
-        for M, R in [amp.split("/")[1:] for amp in args.amplitudes if int(amp.split("/")[0]) == L]:
+        MRTs = set()
+        for M, R_tag in [amp.split("/")[1:] for amp in args.amplitudes if int(amp.split("/")[0]) == L]:
+            R = R_tag.split("@")[0]
+            tag = None
+            if len(R_tag.split("@")) > 1:
+                tag = "@".join(R_tag.split("@")[1:])
             if M == "":
                 for i in range(-L, L + 1):
                     if R == "1" or R == "+1" or R == "+" or R == "":
-                        MRs.add((i, 1))
+                        MRTs.add((i, 1, tag))
                     if R == "-" or R == "-1" or R == "":
-                        MRs.add((i, -1))
+                        MRTs.add((i, -1, tag))
             elif -L <= int(M) <= L:
                 if R == "1" or R == "+1" or R == "+" or R == "":
-                    MRs.add((int(M), +1))
+                    MRTs.add((int(M), +1, tag))
                 if R == "-" or R == "-1" or R == "":
-                    MRs.add((int(M), -1))
-        amp_dict[str(L)] = list(reversed(sorted(MRs)))
-    for L, MRs in amp_dict.items():
-        for M, R in MRs:
+                    MRTs.add((int(M), -1, tag))
+        amp_dict[str(L)] = list(reversed(sorted(MRTs)))
+    for L, MRTs in amp_dict.items():
+        for M, R, tag in MRTs:
             for part, re in zip(["Re", "Im"], [True, False]):
                 out_string += f"amplitude {reaction}::"
                 if R > 0:
                     out_string += "Positive"
                 else:
                     out_string += "Negative"
-                out_string += f"{part}::AMP_{L}{M:+}{R:+} Zlm"
+                out_string += f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} Zlm"
                 out_string += f" {L} {M:+}"
                 if re:
                     out_string += " +1"
@@ -155,17 +161,24 @@ def main():
                 if args.pol_info:
                     out_string += " LOOPPOLANG LOOPPOLVAL"
                 out_string += "\n"
+                if len(tag.split('@')) > 1:
+                    out_string += f"amplitude {reaction}::"
+                    if R > 0:
+                        out_string += "Positive"
+                    else:
+                        out_string += "Negative"
+                    out_string += f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} {' '.join(tag.split('@')[1:])}\n"
 
     # Write Initialization
     out_string += "\n# Initialize Amplitudes\n"
     need_pos_real = True
     need_neg_real = True
-    for L, MRs in amp_dict.items():
-        for M, R in MRs:
+    for L, MRTs in amp_dict.items():
+        for M, R, tag in MRTs:
             out_string += f"initialize {reaction}::"
             if R > 0:
                 out_string += "Positive"
-                out_string += f"Re::AMP_{L}{M:+}{R:+} polar"
+                out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} polar"
                 if need_pos_real:
                     out_string += " @uniform 0.0 real\n"
                     need_pos_real = False
@@ -173,7 +186,7 @@ def main():
                     out_string += " @uniform @polaruniform\n"
             else:
                 out_string += "Negative"
-                out_string += f"Re::AMP_{L}{M:+}{R:+} polar"
+                out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} polar"
                 if need_neg_real:
                     out_string += " @uniform 0.0 real\n"
                     need_neg_real = False
@@ -182,8 +195,8 @@ def main():
 
     # Write Constraints
     out_string += "\n# Constrain Amplitudes\n"
-    for L, MRs in amp_dict.items():
-        for M, R in MRs:
+    for L, MRTs in amp_dict.items():
+        for M, R, tag in MRTs:
             # Re <-> Im constraint
             out_string += "constrain"
             out_string += f" {reaction}::"
@@ -191,13 +204,13 @@ def main():
                 out_string += "Positive"
             else:
                 out_string += "Negative"
-            out_string += f"Re::AMP_{L}{M:+}{R:+}"
+            out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}"
             out_string += f" {reaction}::"
             if R > 0:
                 out_string += "Positive"
             else:
                 out_string += "Negative"
-            out_string += f"Im::AMP_{L}{M:+}{R:+}\n"
+            out_string += f"Im::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}\n"
             # Polarization constraint
             out_string += "constrain"
             out_string += f" {reaction}{pol_tags[0]}::"
@@ -205,25 +218,25 @@ def main():
                 out_string += "Positive"
             else:
                 out_string += "Negative"
-            out_string += f"Re::AMP_{L}{M:+}{R:+}"
+            out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}"
             out_string += f" {reaction}::"
             if R > 0:
                 out_string += "Positive"
             else:
                 out_string += "Negative"
-            out_string += f"Re::AMP_{L}{M:+}{R:+}\n"
+            out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}\n"
 
     # Write Scales
     out_string += "\n# Scale Amplitudes\n"
-    for L, MRs in amp_dict.items():
-        for M, R in MRs:
+    for L, MRTs in amp_dict.items():
+        for M, R, tag in MRTs:
             out_string += "scale"
             out_string += f" {reaction}::"
             if R > 0:
                 out_string += "Positive"
             else:
                 out_string += "Negative"
-            out_string += f"Re::AMP_{L}{M:+}{R:+} LOOPSCALE\n"
+            out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} LOOPSCALE\n"
     out_string += "\n\n# END OF CONFIGURATION FILE"
 
     if args.output == None:
@@ -238,18 +251,6 @@ def main():
         file_path = config_path / f"{file_name}.cfg"
         with open(file_path, 'w') as config_file:
             config_file.write(out_string)
-        if not "configs" in env.keys():
-            env["configs"] = dict()
-        info = {"reaction": reaction,
-                "background": args.background,
-                "pol_info": args.pol_info,
-                "path": str(file_path.resolve()),
-                "amps": amp_dict,
-                "polarizations": polarizations,
-                "file_types": file_types}
-        env["configs"][file_name] = info
-        with open(env_path, 'w') as env_file:
-            json.dump(env, env_file, indent=4)
         print(DEFAULT(f"An AmpTools Configuration has been created and saved to {str(file_path.resolve())}. Use amptools-fit to run a fit using this configuration."))
 
 if __name__ == "__main__":
