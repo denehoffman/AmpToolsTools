@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import json
+import ampwrapper.utils as amputils
+from ampwrapper.fit import FitResults
+import argparse
+import sys
+from pathlib import Path
+import shutil
+import re
+import enlighten
+from tqdm import tqdm
+import pandas as pd
+import subprocess
+from itertools import combinations
+import time
+
+def main():
+    env_path = amputils.get_environment()
+    parser = argparse.ArgumentParser()
+    red_queue = {"cpu": 1990, "threads": 4}
+    green_queue = {"cpu": 1590, "threads": 4}
+    blue_queue = {"cpu": 1990, "threads": 4}
+    queues = {"red": red_queue, "green": green_queue, "blue": blue_queue}
+
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    if not env.get('configs'):
+        print(amputils.wrap("You must create at least one AmpTools configuration file using amptools-generate!"))
+        sys.exit(1)
+    if not env.get('studies'):
+        print(amputils.wrap("You must initialize at least one AmpTools study using amptools-study!"))
+        sys.exit(1)
+    config_keys = list(env['configs'].keys())
+    study_keys = list(env['studies'].keys())
+    parser.add_argument("-s", "--study", choices=study_keys, help="name of AmpTools study to fit")
+    parser.add_argument("-c", "--config", choices=config_keys, help="name of AmpTools config to use in fit")
+    parser.add_argument("-i", "--iterations", type=int, default=1, help="number of fits to do for each bin (randomized bootstrap replication)")
+    parser.add_argument("-a", "--append", action="store_true", help="append these iterations to any existing fits rather than rerunning")
+    parser.add_argument("--seed", default=1, help="seed for randomization")
+    parser.add_argument("--skip-fit", action="store_true", help="skip fitting and just collect available results from any previous fits")
+    parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
+    args = parser.parse_args()
+    # np.random.seed(int(args.seed)) move this down
+    queue = queues[args.queue]
+    # Validation
+    args.study, args.config = amputils.get_study_config(args.study, args.config)
+
+    print(amputils.DEFAULT(f"Initializing AmpTools fit on study {args.study} using {args.config} as the fit configuration"))
+    study = env['studies'][args.study]
+    config = env['configs'][args.config]
+    fit_dir = Path(study['directory']) / f"{args.config}_chain"
+    fit_dir.mkdir(exist_ok=True)
+
+    # Make dispatch script
+    slurm_path = Path(study['directory']) / f"dispatch_{args.config}_chain.csh"
+    with open(slurm_path, 'w') as slurm_file:
+        lines = ["#!/bin/tcsh -f\n"]
+        lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
+        lines.append(f"#SBATCH --partition={args.queue}\n")
+        lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
+        lines.append("#SBATCH --time=2:00:00\n")
+        lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_chain_%A.log\n")
+        lines.append("#SBATCH --quiet\n")
+        lines.append("pwd; hostname; date; whoami\n")
+        lines.append(f"cd {study['directory']}/{args.config}_chain/$1\n")
+        lines.append(f"fit -c {args.config}_${{1}}.cfg\n")
+        lines.append("echo DONE!; date")
+        slurm_file.writelines(lines)
+
+    if not args.skip_fit:
+        # Make directories
+        previous_fit = dict()
+        for i_bin in range(study['nbins']):
+            bin_path = fit_dir / str(i_bin)
+            bin_path.mkdir(exist_ok=True)
+            # Copy configuration file
+            config_path = amputils.get_configs()[args.config]
+            config_it_path = bin_path / f"{args.config}_{i_bin}.cfg"
+            shutil.copy(config_path, config_it_path)
+            # Replace all tags with actual paths and random numbers
+            np.random.seed(args.seed)
+            with open(config_it_path, 'r') as config_file:
+                config_text = config_file.read()
+                if previous_fit == dict():
+                    while "@uniform" in config_text or "@polaruniform" in config_text:
+                        # the "1" at the end here ensures multiple tags on the same line don't all get the same value
+                        config_text = config_text.replace("@uniform", str(np.random.uniform(0.0, 100.0)), 1)
+                        config_text = config_text.replace("@polaruniform", str(np.random.uniform(0.0, 2 * np.pi)), 1)
+                else:
+                    init_re = re.compile(r"(initialize \w+::\w+::)(AMP\S+) polar (@uniform @polaruniform|@uniform 0\.0)(\n| real\n)")
+                    found_all = False
+                    while not found_all:
+                        match = init_re.search(config_text)
+                        if match:
+                            value = complex(previous_fit.get(match.group(2) + "@amp"))
+                            original = match.group(0)
+                            replacement = f"{match.group(1)}{match.group(2)} cartesian {np.real(value)} {np.imag(value)} {match.group(4)}"
+                            config_text = config_text.replace(original, replacement)
+                        else:
+                            found_all = True
+                p = re.compile("\s@(\w*)_(\w*)")
+                matches = p.findall(config_text)
+                for match in matches:
+                    file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
+                    if not file_tag:
+                        print(amputils.wrap("Error in parsing configuration file tags!"))
+                        sys.exit(1)
+                    file_paths = [file_path for file_path in (Path(study['directory']) / match[0]).iterdir() if file_tag in str(file_path.name) and file_path.stem.endswith(f"_{i_bin}")]
+                    if not file_paths:
+                        print(amputils.wrap(f"Error locating the {match[0]} file with polarization {file_tag} for bin {i_bin}!"))
+                        sys.exit(1)
+                    if len(file_paths) > 1:
+                        print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
+                    config_text = config_text.replace(f"@{match[0]}_{match[1]}", str(file_paths[0]))
+            with open(config_it_path, 'w') as config_file:
+                config_file.write(config_text)
+            # Run a fit
+            job_names = []
+            subprocess.run(["sbatch", "-J", f"{args.config}_{str(i_bin)}", str(slurm_path), str(i_bin)])
+            job_names.append(f"{args.config}_{i_bin}")
+            # Wait for all jobs to finish running
+            running = True
+            while running:
+                n_jobs_running, n_jobs_in_queue = amputils.check_SLURM(job_names)
+                print(f"{n_jobs_in_queue:4} job(s) in queue | {n_jobs_running:4} job(s) running", end="\r")
+                if n_jobs_in_queue == 0:
+                    running = False
+                time.sleep(2) # don't check it so often
+            print()
+            # Collect result from bin to feed into next bin
+            fit_path = Path(study['directory']) / f"{args.config}_chain/{i_bin}/{amputils.get_config_reaction(args.config)}.fit"
+            if fit_path.exists():
+                wrapper = FitResults.FitResultsWrapper(str(fit_path))
+                amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
+                polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
+                for amp in amp_list:
+                    if 'Re' in amp:
+                        wave = amp.split("::")[-1]
+                        wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp}"
+                        previous_fit[f"{wave}@amp"] = wrapper.productionParameter(wave_pol0)
+            else:
+                print(f"Fit failed in bin {i_bin}! The chain has been broken, reverting to previous bin result!")
+    ##################
+    # Collect results (for everything)
+    res_path = Path(study['directory']) / f"{args.config}_results_chain.csv"
+    df = pd.DataFrame()
+    for i_bin in tqdm(range(study['nbins'])):
+        bin_path = fit_dir / str(i_bin)
+        fit_path = Path(study['directory']) / f"{args.config}_chain/{i_bin}/{amputils.get_config_reaction(args.config)}.fit"
+        if not fit_path.exists():
+            print(f"No fit file found for bin {i_bin}")
+            continue
+        wrapper = FitResults.FitResultsWrapper(str(fit_path))
+        amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
+        polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
+        res_dict = {"bin": i_bin, "iteration": -1}
+        for amp in amp_list:
+            if 'Re' in amp:
+                wave = amp.split("::")[-1]
+                wave_set = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp}" for pol in polarizations]
+                wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
+                wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp}"
+                res_dict[f"{wave}@int"], res_dict[f"{wave}@int@err"] = wrapper.intensity(wave_set, False)
+                res_dict[f"{wave}@int@acc"], res_dict[f"{wave}@int@acc@err"] = wrapper.intensity(wave_set, True)
+                res_dict[f"{wave}@amp"] = wrapper.productionParameter(wave_pol0)
+        res_dict["total@int"], res_dict["total@int@err"] = wrapper.total_intensity(False)
+        res_dict["total@int@acc"], res_dict["total@int@acc@err"] = wrapper.total_intensity(True)
+        res_dict["likelihood"] = wrapper.likelihood()
+        """
+        amp_pairs = combinations(amp_list, 2)
+        for amp1, amp2 in amp_pairs:
+            wave1 = amp1.split("::")[-1]
+            wave2 = amp2.split("::")[-1]
+            res_dict[f"{wave1}::{wave2}@phase"], res_dict[f"{wave1}::{wave2}@phase@err"] = wrapper.phaseDiff(amp1, amp2)
+        """
+        df = pd.concat([pd.DataFrame(res_dict, index=[0]), df], ignore_index=True)
+    df.to_csv(res_path, index=False)
+    if not study.get('results'):
+        study['results'] = []
+    if not args.config in study['results']:
+        study['results'].append(args.config)
+    with open(env_path, 'w') as env_file:
+        json.dump(env, env_file, indent=4) 
+
+
+if __name__ == "__main__":
+    main()

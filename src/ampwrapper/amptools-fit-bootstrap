@@ -2,7 +2,7 @@
 
 import numpy as np
 import json
-from ampwrapper.utils import get_environment, wrap, list_selector, DEFAULT, check_SLURM
+import ampwrapper.utils as amputils
 from ampwrapper.fit import FitResults
 import argparse
 import sys
@@ -17,7 +17,7 @@ from itertools import combinations
 import time
 
 def main():
-    env_path = get_environment()
+    env_path = amputils.get_environment()
     parser = argparse.ArgumentParser()
     red_queue = {"cpu": 1990, "threads": 4}
     green_queue = {"cpu": 1590, "threads": 4}
@@ -53,39 +53,8 @@ def main():
     queue = queues[args.queue]
 
     # Validation
-    if args.study:
-        study_dict = env['studies'][args.study]
-        valid_configs = [config_name for config_name in config_keys if env['configs'][config_name]['background'] == study_dict['background']]
-        # maybe more to validate number of files/polarization stuff?
-        if args.config:
-            if not args.config in valid_configs:
-                print(wrap(f"{args.config} is not a valid configuration file for this study. Choose one of the following: {', '.join(valid_configs)}"))
-                sys.exit(1)
-        else:
-            args.config, canceled = list_selector(valid_configs, title="Select a fit configuration:")
-            if canceled:
-                print(wrap("User canceled operation!"))
-                sys.exit(0)
-    else:
-        if args.config:
-            config_dict = env['configs'][args.config]
-            valid_studies = [study_name for study_name in study_keys if env['studies'][study_name]['background'] == config_dict['background']]
-            args.study, canceled = list_selector(valid_studies, title="Select a study:")
-            if canceled:
-                print(wrap("User canceled operation!"))
-                sys.exit(0)
-        else:
-            args.study, canceled = list_selector(study_keys, title="Select a study:")
-            if canceled:
-                print(wrap("User canceled operation!"))
-                sys.exit(0)
-            study_dict = env['studies'][args.study]
-            valid_configs = [config_name for config_name in config_keys if env['configs'][config_name]['background'] == study_dict['background']]
-            args.config, canceled = list_selector(valid_configs, title="Select a fit configuration:")
-            if canceled:
-                print(wrap("User canceled operation!"))
-                sys.exit(0)
-    ### ^ there is a cleaner way to do this, maybe rewrite later...
+    args.study, args.config = amputils.get_study_config(args.study, args.config)
+
     flags = ""
     if args.no_data:
         flags += "_nodata"
@@ -93,24 +62,23 @@ def main():
         flags += "_gen"
     if args.acc:
         flags += "_acc"
-    print(DEFAULT(f"Initializing AmpTools bootstrapping on study {args.study} using {args.config} as the fit configuration"))
+    print(amputils.DEFAULT(f"Initializing AmpTools bootstrapping on study {args.study} using {args.config} as the fit configuration"))
     study = env['studies'][args.study]
-    config = env['configs'][args.config]
     res_file = Path(study['directory']) / f"{args.config}_results.csv"
     fit_dir = Path(study['directory']) / f"{args.config}_bootstrap{flags}"
     fit_dir.mkdir(exist_ok=True)
     if not res_file.exists():
-        print(wrap("This configuration has not yet been fit for this study, run amptools-fit first!"))
+        print(amputils.wrap("This configuration has not yet been fit for this study, run amptools-fit first!"))
         sys.exit(1)
     # Get the best fit in each bin
     df = pd.read_csv(res_file)
     bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
-    best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].max()] for bin_df in bin_dfs])
+    best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
     best_df = best_df.drop_duplicates(subset=['bin'])
     # Make sure there *is* a best fit in each bin
     missing_bins = set(range(study['nbins'])) - set(best_df['bin'])
     if missing_bins:
-        print(wrap(f"Missing fits for the following bins: {missing_bins}. Currently, this program will not run without a fit in each bin."))
+        print(amputils.wrap(f"Missing fits for the following bins: {missing_bins}. Currently, this program will not run without a fit in each bin."))
         sys.exit(1)
     # Make directories
     for i_bin in range(study['nbins']):
@@ -130,7 +98,7 @@ def main():
             it_path = bin_path / str(i_it)
             it_path.mkdir(exist_ok=True)
             # Copy configuration file
-            config_path = Path(config['path'])
+            config_path = amputils.get_configs()[args.config]
             config_it_path = it_path / f"{args.config}_{i_bin}-{i_it}.cfg"
             shutil.copy(config_path, config_it_path)
             # Change data reader to a bootstrap reader with a seed
@@ -172,14 +140,14 @@ def main():
                 for match in matches:
                     file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
                     if not file_tag:
-                        print(wrap("Error in parsing configuration file tags!"))
+                        print(amputils.wrap("Error in parsing configuration file tags!"))
                         sys.exit(1)
                     file_paths = [file_path for file_path in (Path(study['directory']) / match[0]).iterdir() if file_tag in str(file_path.name) and file_path.stem.endswith(f"_{i_bin}")]
                     if not file_paths:
-                        print(wrap(f"Error locating the {match[0]} file with polarization {file_tag} for bin {i_bin}!"))
+                        print(amputils.wrap(f"Error locating the {match[0]} file with polarization {file_tag} for bin {i_bin}!"))
                         sys.exit(1)
                     if len(file_paths) > 1:
-                        print(wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
+                        print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
                     config_text = config_text.replace(f"@{match[0]}_{match[1]}", str(file_paths[0]))
 
             with open(config_it_path, 'w') as config_file:
@@ -191,8 +159,8 @@ def main():
         lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
         lines.append(f"#SBATCH --partition={args.queue}\n")
         lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
-        lines.append("#SBATCH --time=40:00\n")
-        lines.append(f"#SBATCH --output=log_{args.config}_%A_%a.log\n")
+        lines.append("#SBATCH --time=2:00:00\n")
+        lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_bootstrap_%A.log\n")
         lines.append("#SBATCH --quiet\n")
         lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
         lines.append("pwd; hostname; date; whoami\n")
@@ -212,7 +180,7 @@ def main():
         # Wait for all jobs to finish running
         running = True
         while running:
-            n_jobs_running, n_jobs_in_queue = check_SLURM(job_names)
+            n_jobs_running, n_jobs_in_queue = amputils.check_SLURM(job_names)
             print(f"{n_jobs_in_queue:4} job(s) in queue | {n_jobs_running:4} job(s) running", end="\r")
             if n_jobs_in_queue == 0:
                 running = False
@@ -225,20 +193,20 @@ def main():
     for i_bin in tqdm(range(study['nbins'])):
         bin_path = fit_dir / str(i_bin)
         for it in [int(path.name) for path in bin_path.iterdir()]:
-            fit_path = Path(study['directory']) / f"{args.config}_bootstrap{flags}/{i_bin}/{it}/{config['reaction']}.fit"
+            fit_path = Path(study['directory']) / f"{args.config}_bootstrap{flags}/{i_bin}/{it}/{amputils.get_config_reaction(args.config)}.fit"
             if not fit_path.exists():
                 print(f"No fit file found for bin {i_bin} iteration {it}")
                 continue
             wrapper = FitResults.FitResultsWrapper(str(fit_path))
             amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
-            polarizations = [{"AMO": "_AMO", "PARA_0": "_000", "PERP_45": "_045", "PERP_90": "_090", "PARA_135": "_135"}.get(pol) for pol in config['polarizations']]
+            polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
             res_dict = {"bin": i_bin, "iteration": it}
             for amp in amp_list:
                 if 'Re' in amp:
                     wave = amp.split("::")[-1]
-                    wave_set = [f"{config['reaction']}{pol}::{amp}" for pol in polarizations]
-                    wave_set.extend([f"{config['reaction']}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
-                    wave_pol0 = f"{config['reaction']}{polarizations[0]}::{amp}"
+                    wave_set = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp}" for pol in polarizations]
+                    wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
+                    wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp}"
                     res_dict[f"{wave}@int"], res_dict[f"{wave}@int@err"] = wrapper.intensity(wave_set, False)
                     res_dict[f"{wave}@int@acc"], res_dict[f"{wave}@int@acc@err"] = wrapper.intensity(wave_set, True)
                     res_dict[f"{wave}@amp"] = wrapper.productionParameter(wave_pol0)

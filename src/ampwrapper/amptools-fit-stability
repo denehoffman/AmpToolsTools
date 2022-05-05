@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import json
+import ampwrapper.utils as amputils
+from ampwrapper.fit import FitResults
+import argparse
+import sys
+from pathlib import Path
+import shutil
+import re
+import enlighten
+from tqdm import tqdm
+import pandas as pd
+import subprocess
+from itertools import combinations
+import time
+
+def main():
+    env_path = amputils.get_environment()
+    parser = argparse.ArgumentParser()
+    red_queue = {"cpu": 1990, "threads": 4}
+    green_queue = {"cpu": 1590, "threads": 4}
+    blue_queue = {"cpu": 1990, "threads": 4}
+    queues = {"red": red_queue, "green": green_queue, "blue": blue_queue}
+
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    if not env.get('configs'):
+        print(amputils.wrap("You must create at least one AmpTools configuration file using amptools-generate!"))
+        sys.exit(1)
+    if not env.get('studies'):
+        print(amputils.wrap("You must initialize at least one AmpTools study using amptools-study!"))
+        sys.exit(1)
+    config_keys = list(env['configs'].keys())
+    study_keys = list(env['studies'].keys())
+    parser.add_argument("-s", "--study", choices=study_keys, help="name of AmpTools study to bootstrap")
+    parser.add_argument("-c", "--config", choices=config_keys, help="name of AmpTools config to use in bootstrap")
+    parser.add_argument("-i", "--iterations", type=int, default=1, help="number of fits to do for each bin (randomized initializations)")
+    parser.add_argument("-a", "--append", action="store_true", help="append these iterations to any existing fits rather than rerunning")
+    parser.add_argument("--seed", default=1, help="seed for randomization")
+    parser.add_argument("--skip-write", action="store_true", help="skip writing config files (use this if it's already done)")
+    parser.add_argument("--skip-fit", action="store_true", help="skip fitting and just collect available results from any previous fits")
+    parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
+    # Bootstrap specific
+    #parser.add_argument("--no-data", action="store_true", help="(optional) skip bootstrapping on the data (and background, if applicable) file(s)")
+    #parser.add_argument("--gen", action="store_true", help="(optional) bootstrap generated Monte Carlo")
+    #parser.add_argument("--acc", action="store_true", help="(optional) bootstrap accepted Monte Carlo")
+    args = parser.parse_args()
+    #if args.no_data:
+    #    if not (args.gen or args.acc):
+    #        print(amputils.wrap("You must select at least one bootstrapping option between --gen or --acc if you choose --no-data!"))
+    #        sys.exit(1)
+    queue = queues[args.queue]
+
+    # Validation
+    args.study, args.config = amputils.get_study_config(args.study, args.config)
+
+    #flags = ""
+    #if args.no_data:
+    #    flags += "_nodata"
+    #if args.gen:
+    #    flags += "_gen"
+    #if args.acc:
+    #    flags += "_acc"
+    print(amputils.DEFAULT(f"Initializing AmpTools bootstrapping on study {args.study} using {args.config} as the fit configuration"))
+    study = env['studies'][args.study]
+    config = env['configs'][args.config]
+    res_file = Path(study['directory']) / f"{args.config}_results.csv"
+    fit_dir = Path(study['directory']) / f"{args.config}_stability"
+    fit_dir.mkdir(exist_ok=True)
+    if not res_file.exists():
+        print(amputils.wrap("This configuration has not yet been fit for this study, run amptools-fit first!"))
+        sys.exit(1)
+    # Get the best fit in each bin
+    df = pd.read_csv(res_file)
+    #bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
+    #best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].max()] for bin_df in bin_dfs])
+    #best_df = best_df.drop_duplicates(subset=['bin'])
+    # we actually don't care about the best fit right now!
+    # Make sure there *is* a best fit in each bin
+    #missing_bins = set(range(study['nbins'])) - set(best_df['bin'])
+    #if missing_bins:
+    #    print(amputils.wrap(f"Missing fits for the following bins: {missing_bins}. Currently, this program will not run without a fit in each bin."))
+    #    sys.exit(1)
+    # Make directories
+    for _, row in tqdm(df.iterrows(), total=len(df)):
+        i_bin = row['bin']
+        bin_path = fit_dir / str(i_bin)
+        bin_path.mkdir(exist_ok=True)
+        iterations = list(range(args.iterations))
+        if args.append:
+            existing_iteration_nums = [int(path.name) for path in bin_path.iterdir()]
+            if existing_iteration_nums:
+                max_it = max(existing_iteration_nums)
+            else:
+                max_it = -1
+            iterations = list(range(max_it + 1, max_it + 1 + args.iterations))
+        if not args.skip_write:
+            i_fit_it = row['iteration']
+            it_path = bin_path / str(i_fit_it)
+            for i_it in iterations:
+                np.random.seed(int(args.seed) + i_it)
+                boot_path = it_path / str(i_it)
+                boot_path.mkdir(exist_ok=True, parents=True)
+                # Copy configuration file
+                config_path = amputils.get_configs()[args.config]
+                config_it_path = boot_path / f"{args.config}_{i_bin}-{i_fit_it}-{i_it}.cfg"
+                shutil.copy(config_path, config_it_path)
+                # Change data reader to a bootstrap reader with a seed
+                with open(config_it_path, 'r') as config_file:
+                    config_text = config_file.read()
+                    #if not args.no_data:
+                    bootstrap_seed = np.random.randint(100000)
+                    config_text = re.sub(r"data\s(\w+)\sROOTDataReader\sLOOPDATAFILE",
+                                        rf"data \1 ROOTDataReaderBootstrap LOOPDATAFILE {bootstrap_seed}",
+                                        config_text)
+                    bootstrap_seed = np.random.randint(100000)
+                    config_text = re.sub(r"bkgnd\s(\w+)\sROOTDataReader\sLOOPBKGFILE",
+                                        rf"bkgnd \1 ROOTDataReaderBootstrap LOOPBKGFILE {bootstrap_seed}",
+                                        config_text)
+                    """
+                    if args.gen:
+                        bootstrap_seed = np.random.randint(100000)
+                        config_text = re.sub(r"genmc\s(\w+)\sROOTDataReader\sLOOPGENFILE",
+                                            rf"genmc \1 ROOTDataReaderBootstrap LOOPGENFILE {bootstrap_seed}",
+                                            config_text)
+                    if args.acc:
+                        bootstrap_seed = np.random.randint(100000)
+                        config_text = re.sub(r"accmc\s(\w+)\sROOTDataReader\sLOOPACCFILE",
+                                            rf"accmc \1 ROOTDataReaderBootstrap LOOPACCFILE {bootstrap_seed}",
+                                            config_text)
+                    """
+                    current_fit = df.loc[df['bin'] == i_bin].loc[df['iteration'] == i_fit_it].to_dict(orient='records')[0]
+                    init_re = re.compile(r"(initialize \w+::\w+::)(AMP\S+) polar (@uniform @polaruniform|@uniform 0\.0)(\n| real\n)")
+                    found_all = False
+                    while not found_all:
+                        match = init_re.search(config_text)
+                        if match:
+                            value = complex(current_fit.get(match.group(2) + "@amp"))
+                            original = match.group(0)
+                            replacement = f"{match.group(1)}{match.group(2)} cartesian {np.real(value)} {np.imag(value)} {match.group(4)}"
+                            config_text = config_text.replace(original, replacement)
+                        else:
+                            found_all = True
+                    p = re.compile("\s@(\w*)_(\w*)")
+                    matches = p.findall(config_text)
+                    for match in matches:
+                        file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
+                        if not file_tag:
+                            print(amputils.wrap("Error in parsing configuration file tags!"))
+                            sys.exit(1)
+                        file_paths = [file_path for file_path in (Path(study['directory']) / match[0]).iterdir() if file_tag in str(file_path.name) and file_path.stem.endswith(f"_{i_bin}")]
+                        if not file_paths:
+                            print(amputils.wrap(f"Error locating the {match[0]} file with polarization {file_tag} for bin {i_bin}!"))
+                            sys.exit(1)
+                        if len(file_paths) > 1:
+                            print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
+                        config_text = config_text.replace(f"@{match[0]}_{match[1]}", str(file_paths[0]))
+
+                with open(config_it_path, 'w') as config_file:
+                    config_file.write(config_text)
+    # Dispatch jobs
+    slurm_path = Path(study['directory']) / f"dispatch_{args.config}_stability.csh"
+    with open(slurm_path, 'w') as slurm_file:
+        lines = ["#!/bin/tcsh -f\n"]
+        lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
+        lines.append(f"#SBATCH --partition={args.queue}\n")
+        lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
+        lines.append("#SBATCH --time=2:00:00\n")
+        lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_stability_%A.log\n")
+        lines.append("#SBATCH --quiet\n")
+        lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
+        lines.append("pwd; hostname; date; whoami\n")
+        lines.append("echo $SLURM_ARRAY_TASK_ID\n")
+        lines.append(f"set bindir={study['directory']}/{args.config}_stability/$1\n")
+        lines.append("foreach iter_dir ($bindir/*)\n")
+        lines.append("    echo $iter_dir\n")
+        lines.append("    cd $iter_dir/$SLURM_ARRAY_TASK_ID\n")
+        lines.append("    pwd\n")
+        lines.append("    set iteration=`basename $iter_dir`\n")
+        lines.append(f"    fit -c {args.config}_${{1}}-${{iteration}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
+        lines.append("end\n")
+        lines.append("echo DONE!; date")
+        slurm_file.writelines(lines)
+
+    # Run fits
+    if not args.skip_fit:
+        job_names = []
+        for i_bin in tqdm(range(study['nbins'])):
+            subprocess.run(["sbatch", "-J", f"{args.config}_{str(i_bin)}", str(slurm_path), str(i_bin)])
+            job_names.append(f"{args.config}_{i_bin}")
+        # Wait for all jobs to finish running
+        running = True
+        while running:
+            n_jobs_running, n_jobs_in_queue = amputils.check_SLURM(job_names)
+            print(f"{n_jobs_in_queue:4} job(s) in queue | {n_jobs_running:4} job(s) running", end="\r")
+            if n_jobs_in_queue == 0:
+                running = False
+            time.sleep(2) # don't check it so often
+        print()
+
+    # Collect results
+    res_path = Path(study['directory']) / f"{args.config}_results_stability.csv"
+    df = pd.DataFrame()
+    for i_bin in tqdm(range(study['nbins'])):
+        bin_path = fit_dir / str(i_bin)
+        for fit_path in bin_path.iterdir():
+            fit_it = int(fit_path.name)
+            for it in [int(path.name) for path in fit_path.iterdir() if path.is_dir()]:
+                fit_path = Path(study['directory']) / f"{args.config}_stability/{i_bin}/{fit_it}/{it}/{amputils.get_config_reaction(args.config)}.fit"
+                if not fit_path.exists():
+                    print(f"No fit file found for bin {i_bin} iteration {fit_it} subiteration {it}")
+                    continue
+                wrapper = FitResults.FitResultsWrapper(str(fit_path))
+                amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
+                polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
+                res_dict = {"bin": i_bin, "iteration": fit_it, "subiteration": it}
+                for amp in amp_list:
+                    if 'Re' in amp:
+                        wave = amp.split("::")[-1]
+                        wave_set = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp}" for pol in polarizations]
+                        wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
+                        wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp}"
+                        res_dict[f"{wave}@int"], res_dict[f"{wave}@int@err"] = wrapper.intensity(wave_set, False)
+                        res_dict[f"{wave}@int@acc"], res_dict[f"{wave}@int@acc@err"] = wrapper.intensity(wave_set, True)
+                        res_dict[f"{wave}@amp"] = wrapper.productionParameter(wave_pol0)
+                res_dict["total@int"], res_dict["total@int@err"] = wrapper.total_intensity(False)
+                res_dict["total@int@acc"], res_dict["total@int@acc@err"] = wrapper.total_intensity(True)
+                res_dict["likelihood"] = wrapper.likelihood()
+                """
+                amp_pairs = combinations(amp_list, 2)
+                for amp1, amp2 in amp_pairs:
+                    wave1 = amp1.split("::")[-1]
+                    wave2 = amp2.split("::")[-1]
+                    res_dict[f"{wave1}::{wave2}@phase"], res_dict[f"{wave1}::{wave2}@phase@err"] = wrapper.phaseDiff(amp1, amp2)
+                """
+                df = pd.concat([pd.DataFrame(res_dict, index=[0]), df], ignore_index=True)
+    df.to_csv(res_path, index=False)
+    #if not study.get('bootstraps'):
+    #    study['bootstraps'] = []
+    #if not args.config in study['bootstraps']:
+    #    study['bootstraps'].append(args.config)
+    with open(env_path, 'w') as env_file:
+        json.dump(env, env_file, indent=4) 
+
+
+
+if __name__ == "__main__":
+    main()

@@ -12,9 +12,10 @@ import pandas as pd
 import enlighten
 import json
 import ROOT
+import re
 import subprocess
 
-def get_environment():
+def get_environment() -> Path:
     config_path = Path.home() / ".amptoolstools"
     if config_path.exists():
         with open(config_path, 'r') as config_file:
@@ -22,7 +23,7 @@ def get_environment():
         env_path = config['path']
         return Path(env_path).resolve()
     else:
-        print(wrap("No active environment found! Use amptools-setup and amptools-activate to create one!"))
+        print(wrap("No active environment found! Use amptools-activate to create one!"))
         sys.exit(1)
         
 
@@ -589,7 +590,7 @@ def file_selector(root=Path.cwd(), multiselect=False, suffix=""):
             selected_path = str(files[selected_index - 1])
         return selected_path, selected_index == 0
 
-def list_selector(selections, title="Select an option", multiselect=False):
+def list_selector(selections, title="Select an option", multiselect=False, exit_on_cancel=True, canceled_text="User canceled operation!"):
     options = ["Cancel"] + selections
     menu = TerminalMenu(
             menu_entries=options,
@@ -605,7 +606,9 @@ def list_selector(selections, title="Select an option", multiselect=False):
     if multiselect:
         selected_indices = menu.show()
         selected_items = [selections[ind - 1] for ind in selected_indices if ind != 0]
-        # returns (selection list, T/F was "Cancel" selected?)
+        if exit_on_cancel and 0 in selected_indices:
+            print(wrap(canceled_text))
+            sys.exit(0)
         return selected_items, 0 in selected_indices
     else:
         selected_index = menu.show()
@@ -613,6 +616,9 @@ def list_selector(selections, title="Select an option", multiselect=False):
             selected_item = None
         else:
             selected_item = str(selections[selected_index - 1])
+        if exit_on_cancel and selected_index == 0:
+            print(wrap(canceled_text))
+            sys.exit(0)
         return selected_item, selected_index == 0
 
 def split_mass(flattree: Path, output_dir: Path, low: float, high: float, nbins: int, manager):
@@ -660,11 +666,21 @@ def split_mass_broken(flattree: Path, output_dir: Path, low: float, high: float,
             tfile_out['kin'].show()
     pbar.close()
 
+def queue_length(job_names):
+    jobs = subprocess.run(['squeue', '-h', '-u', os.getlogin(), '-o', '%j'], stdout=subprocess.PIPE).stdout.decode('utf-8').splitlines()
+    matching_jobs = [job for job in jobs if job in job_names]
+    return len(matching_jobs)
+
+def running_length(job_names):
+    jobs = subprocess.run(['squeue', '-h', '-u', os.getlogin(), '-o', '%j', '-t', 'running'], stdout=subprocess.PIPE).stdout.decode('utf-8').splitlines()
+    matching_jobs = [job for job in jobs if job in job_names]
+    return len(matching_jobs)
+
 def check_SLURM(job_names):
     if not isinstance(job_names, list):
         job_names = [job_names]
-    n_jobs_in_queue = len(subprocess.run(['squeue', '-h', '-u', os.getlogin(), f"--name={','.join(job_names)}"], stdout=subprocess.PIPE).stdout.decode('utf-8').splitlines())
-    n_jobs_running = len(subprocess.run(['squeue', '-h', '-u', os.getlogin(), '-t', 'running', f"--name={','.join(job_names)}"], stdout=subprocess.PIPE).stdout.decode('utf-8').splitlines())
+    n_jobs_in_queue = queue_length(job_names)
+    n_jobs_running = running_length(job_names)
     return n_jobs_running, n_jobs_in_queue
 
 def get_logger():
@@ -674,3 +690,59 @@ def get_logger():
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
     return logger
+
+def get_configs() -> dict:
+    env_path = get_environment()
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    env_parent = env_path.parent
+    config_path = env_parent / "configs"
+    return {f.stem: f for f in config_path.iterdir() if f.suffix == ".cfg"}
+
+def get_config_pols(name: str):
+    config_path = get_configs()[name]
+    with open(config_path, 'r') as config_file:
+        content = config_file.read()
+    regex = re.compile("loop LOOPDATAFILE (?:@DATA_(\S{3})\s)(?:@DATA_(\S{3})\s)?(?:@DATA_(\S{3})\s)?(?:@DATA_(\S{3})?\s)?(?:@DATA_(\S{3})\s)?")
+    m = regex.search(content)
+    return [g for g in m.groups() if g is not None]
+
+def get_config_reaction(name: str) -> str:
+    config_path = get_configs()[name]
+    with open(config_path, 'r') as config_file:
+        content = config_file.read()
+    regex = re.compile("reaction (.+?)\s")
+    return regex.search(content).group(1)
+
+def get_config_background(name: str) -> bool:
+    config_path = get_configs()[name]
+    with open(config_path, 'r') as config_file:
+        content = config_file.read()
+    return "bkgnd" in content
+
+def get_study_config(study=None, config=None):
+    env_path = get_environment()
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    config_keys = list(get_configs().keys())
+    study_keys = list(env['studies'].keys())
+    if study:
+        study_dict = env['studies'][study]
+        valid_configs = [config_name for config_name in config_keys if get_config_background(config_name) == study_dict['background']]
+        # maybe more to validate number of files/polarization stuff?
+        if config:
+            if not config in valid_configs:
+                print(wrap(f"{config} is not a valid configuration file for this study. Choose one of the following: {', '.join(valid_configs)}"))
+                sys.exit(1)
+        else:
+            config, _ = list_selector(valid_configs, title="Select a fit configuration:")
+    else:
+        if config:
+            valid_studies = [study_name for study_name in study_keys if env['studies'][study_name]['background'] == get_config_background(config)]
+            study, _ = list_selector(valid_studies, title="Select a study:")
+        else:
+            study, _ = list_selector(study_keys, title="Select a study:")
+            study_dict = env['studies'][study]
+            valid_configs = [config_name for config_name in config_keys if get_config_background(config_name) == study_dict['background']]
+            config, _ = list_selector(valid_configs, title="Select a fit configuration:")
+    return study, config
