@@ -225,6 +225,7 @@ this option for more information)''')
                         action='store_true',
                         help="Force recreation of new merged ROOT files if they already exist")
     parser.add_argument('--no-pol', action='store_true', help="Don't include energy-dependent polarization information in the beam 4-momentum")
+    parser.add_argument('--no-accidental-subtraction', action='store_true', help="Skip accidental weighting")
     args = parser.parse_args()
     print(welcome_string)
     print(wrap("Checking input directory..."))
@@ -628,6 +629,8 @@ def convert_pyroot(input_file_path, args, final_state_indices):
                         locBeamRFDeltaT = locBeamX4.E() - (locRFTime + (locBeamX4.Z() - locTargetX4.Z()) / 29.9792458)
                         accidental_weight = -1 / (2 * n_beam_bunches) if abs(locBeamRFDeltaT) > 0.5 * 4.008 else 1
                         if n_beam_bunches == -1:
+                            accidental_weight = 1
+                        if args.no_accidental_subtraction:
                             accidental_weight = 1
                         try:
                             combo_weight = float(args.weight)
