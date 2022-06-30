@@ -146,6 +146,7 @@ optional arguments:
                         name for output configuration file
   --amo                 include amorphous runs
   -n NAME, --name NAME  reaction name
+  --pol-files           use separate files for each polarization
   --add-pol-info        polarization information is NOT included in the ROOT
                         file's beam photon four-vector
   --sym                 symmetrize the two (non-recoil) particles (use this
@@ -174,6 +175,7 @@ optional arguments:
   --amo                 include amorphous runs
   --sym                 symmetrize the two (non-recoil) particles (use this
                         for identical particles)
+  --pol-files           use separate files for each polarization
   --add-pol-info        polarization information is NOT included in the ROOT
                         file's beam photon four-vector
   -b, --background      use a separate set of background files

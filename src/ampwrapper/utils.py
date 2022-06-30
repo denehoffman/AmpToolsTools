@@ -705,7 +705,10 @@ def get_config_pols(name: str):
         content = config_file.read()
     regex = re.compile("loop LOOPDATAFILE (?:@DATA_(\S{3})\s)(?:@DATA_(\S{3})\s)?(?:@DATA_(\S{3})\s)?(?:@DATA_(\S{3})?\s)?(?:@DATA_(\S{3})\s)?")
     m = regex.search(content)
-    return [g for g in m.groups() if g is not None]
+    if m:
+        return [g for g in m.groups() if g is not None]
+    else:
+        return []
 
 def get_config_reaction(name: str) -> str:
     config_path = get_configs()[name]

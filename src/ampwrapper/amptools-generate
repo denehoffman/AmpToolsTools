@@ -18,6 +18,7 @@ def main():
     parser.add_argument('-o', '--output', help="name for output configuration file")
     parser.add_argument('--amo', action="store_true", help="include amorphous runs")
     parser.add_argument('-n', '--name', help="reaction name", default="default")
+    parser.add_argument('--pol-files', action="store_true", help="use separate files for each polarization")
     parser.add_argument('--add-pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
     parser.add_argument('--sym', action="store_true", help="symmetrize the two (non-recoil) particles (use this for identical particles)")
     args = parser.parse_args()
@@ -71,38 +72,49 @@ def main():
         out_string += f"parameter polScale{pol} 1.0\n"
 
     # Write Loops
-    out_string += "\n# Loops\n"
-    reaction_loop = f"loop {reaction}"
-    scale_loop = "loop LOOPSCALE"
-    ni_loop = "loop LOOPNIFILE"
-    for pol in pol_tags:
-        reaction_loop += f" {reaction}{pol}"
-        scale_loop += f" [polScale{pol}]"
-        ni_loop += f" normint{pol}"
-    out_string += f"{reaction_loop}\n"
-    out_string += f"{scale_loop}\n"
-    out_string += f"{ni_loop}\n"
-    for file_type in file_types:
-        file_loop = f"loop LOOP{file_type}FILE"
+    if args.pol_files:
+        out_string += "\n# Loops\n"
+        reaction_loop = f"loop {reaction}"
+        scale_loop = "loop LOOPSCALE"
+        ni_loop = "loop LOOPNIFILE"
         for pol in pol_tags:
-            file_loop += f" @{file_type}{pol}"
-        out_string += f"{file_loop}\n"
+            reaction_loop += f" {reaction}{pol}"
+            scale_loop += f" [polScale{pol}]"
+            ni_loop += f" normint{pol}"
+        out_string += f"{reaction_loop}\n"
+        out_string += f"{scale_loop}\n"
+        out_string += f"{ni_loop}\n"
+        for file_type in file_types:
+            file_loop = f"loop LOOP{file_type}FILE"
+            for pol in pol_tags:
+                file_loop += f" @{file_type}{pol}"
+            out_string += f"{file_loop}\n"
 
-    if args.add_pol_info:
-        polang_loop = "loop LOOPPOLANG"
-        polval_loop = "loop LOOPPOLVAL"
-        for pol in pol_tags:
-            polang_loop += f" polAngle{pol}"
-            polval_loop += f" polVal{pol}"
+        if args.add_pol_info:
+            polang_loop = "loop LOOPPOLANG"
+            polval_loop = "loop LOOPPOLVAL"
+            for pol in pol_tags:
+                polang_loop += f" polAngle{pol}"
+                polval_loop += f" polVal{pol}"
     
     # Write Data Readers
-    out_string += "\n# Paths\n"
-    out_string += f"normintfile {reaction} LOOPNIFILE\n"
-    out_string += f"data {reaction} ROOTDataReader LOOPDATAFILE\n"
-    out_string += f"genmc {reaction} ROOTDataReader LOOPGENFILE\n"
-    out_string += f"accmc {reaction} ROOTDataReader LOOPACCFILE\n"
-    if "BKG" in file_types:
-        out_string += f"bkgnd {reaction} ROOTDataReader LOOPBKGFILE\n"
+    if args.pol_files:
+        out_string += "\n# Paths\n"
+        out_string += f"normintfile {reaction} LOOPNIFILE\n"
+        out_string += f"data {reaction} ROOTDataReader LOOPDATAFILE\n"
+        out_string += f"genmc {reaction} ROOTDataReader LOOPGENFILE\n"
+        out_string += f"accmc {reaction} ROOTDataReader LOOPACCFILE\n"
+        if "BKG" in file_types:
+            out_string += f"bkgnd {reaction} ROOTDataReader LOOPBKGFILE\n"
+    else:
+        out_string += "\n# Paths\n"
+        out_string += f"normintfile {reaction} NI_FILE\n"
+        out_string += f"data {reaction} ROOTDataReader @DATA\n"
+        out_string += f"genmc {reaction} ROOTDataReader @GEN\n"
+        out_string += f"accmc {reaction} ROOTDataReader @ACC\n"
+        if "BKG" in file_types:
+            out_string += f"bkgnd {reaction} ROOTDataReader @BKG\n"
+        
 
     # Write Sums
     out_string += "\n# Sums\n"
@@ -127,7 +139,7 @@ def main():
         MRTs = set()
         for M, R_tag in [amp.split("/")[1:] for amp in args.amplitudes if int(amp.split("/")[0]) == L]:
             R = R_tag.split("@")[0]
-            tag = None
+            tag = ""
             if len(R_tag.split("@")) > 1:
                 tag = "@".join(R_tag.split("@")[1:])
             if M == "":
@@ -211,32 +223,34 @@ def main():
             else:
                 out_string += "Negative"
             out_string += f"Im::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}\n"
-            # Polarization constraint
-            out_string += "constrain"
-            out_string += f" {reaction}{pol_tags[0]}::"
-            if R > 0:
-                out_string += "Positive"
-            else:
-                out_string += "Negative"
-            out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}"
-            out_string += f" {reaction}::"
-            if R > 0:
-                out_string += "Positive"
-            else:
-                out_string += "Negative"
-            out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}\n"
+            if args.pol_files:
+                # Polarization constraint
+                out_string += "constrain"
+                out_string += f" {reaction}{pol_tags[0]}::"
+                if R > 0:
+                    out_string += "Positive"
+                else:
+                    out_string += "Negative"
+                out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}"
+                out_string += f" {reaction}::"
+                if R > 0:
+                    out_string += "Positive"
+                else:
+                    out_string += "Negative"
+                out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}\n"
 
     # Write Scales
-    out_string += "\n# Scale Amplitudes\n"
-    for L, MRTs in amp_dict.items():
-        for M, R, tag in MRTs:
-            out_string += "scale"
-            out_string += f" {reaction}::"
-            if R > 0:
-                out_string += "Positive"
-            else:
-                out_string += "Negative"
-            out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} LOOPSCALE\n"
+    if args.pol_files:
+        out_string += "\n# Scale Amplitudes\n"
+        for L, MRTs in amp_dict.items():
+            for M, R, tag in MRTs:
+                out_string += "scale"
+                out_string += f" {reaction}::"
+                if R > 0:
+                    out_string += "Positive"
+                else:
+                    out_string += "Negative"
+                out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} LOOPSCALE\n"
     out_string += "\n\n# END OF CONFIGURATION FILE"
 
     if args.output == None:
