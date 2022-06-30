@@ -38,7 +38,7 @@ def main() -> None:
     env_path = (directory / ".env.json").resolve()
     if not env_path.exists():
         print(wrap(f"No AmpTools environment found in {str(directory)}! Creating one now!"))
-        setup()
+        setup(directory)
 
     config_path = Path.home() / ".amptoolstools"
     config = {}
