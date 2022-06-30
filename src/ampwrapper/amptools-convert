@@ -226,6 +226,7 @@ this option for more information)''')
                         help="Force recreation of new merged ROOT files if they already exist")
     parser.add_argument('--no-pol', action='store_true', help="Don't include energy-dependent polarization information in the beam 4-momentum")
     parser.add_argument('--no-accidental-subtraction', action='store_true', help="Skip accidental weighting")
+    parser.add_argument('--min-pol-frac', default=0.0, type=float, help="Minimum polarization fraction to allow in data (ignored if --no-pol is used)")
     args = parser.parse_args()
     print(welcome_string)
     print(wrap("Checking input directory..."))
@@ -508,9 +509,10 @@ def convert_pyroot(input_file_path, args, final_state_indices):
     pol_string = 'AMO'
     run_tags = ['S17', 'S18', 'F18']
     run_tag = 'S17'
-    for pol, tag in zip(pol_strings, run_tags):
+    for pol in pol_strings:
         if pol in input_file_path.name:
             pol_string = pol
+    for tag in run_tags:
         if tag in input_file_path.name:
             run_tag = tag
     if not output_file_path.exists() or args.force:
@@ -589,6 +591,10 @@ def convert_pyroot(input_file_path, args, final_state_indices):
             tfile_in.Close()
             tfile_out.Close()
         else: # if not thrown (real data or accepted MC)
+            num_events_tot = 0
+            num_events = 0
+            num_events_polarized = 0
+            num_events_weighted = 0
             n_beam_bunches = -1
             beam_bunch_regex = re.compile(".*_B(\d).*")
             beam_bunch_match = beam_bunch_regex.match(ttree_name_in)
@@ -622,7 +628,9 @@ def convert_pyroot(input_file_path, args, final_state_indices):
                               dynamic_ncols=True,
                               unit='event'):
                 for i_combo in range(event.NumCombos):
+                    num_events_tot += 1
                     if not event.IsComboCut[i_combo]:
+                        num_events += 1
                         locBeamX4 = event.ComboBeam__X4_KinFit[i_combo]
                         locTargetX4 = event.X4_Production
                         locRFTime = event.RFTime_Measured[i_combo]
@@ -645,6 +653,7 @@ def convert_pyroot(input_file_path, args, final_state_indices):
                                 combo_weight = event_df[event_df['ComboNumber'] == i_combo].iloc[0]['Signal Weight']
                             except:
                                 continue # skip the ones we can't find weights for, they're either messed up or zero, in which case AmpTools gets mad if you put a bunch of zero-weight events.
+                        num_events_weighted += 1
                         Weight[0] = combo_weight * accidental_weight
                         P4_FS_Tot = ROOT.TLorentzVector()
                         for i, substate in enumerate(final_state_indices):
@@ -672,6 +681,10 @@ def convert_pyroot(input_file_path, args, final_state_indices):
                                 e_bin = pol_hists.get(pol_string).GetXaxis().FindBin(event.ComboBeam__P4_KinFit[i_combo].E()) # these histograms reference the lab frame beam energy
                                 if not (e_bin == 0 or e_bin > pol_hists.get(pol_string).GetXaxis().GetNbins()):
                                     pol_fraction = pol_hists.get(pol_string).GetBinContent(e_bin)
+                            if pol_fraction < args.min_pol_frac:
+                                continue
+                            else:
+                                num_events_polarized += 1
                             Px_Beam[0] = float(pol_fraction * np.cos(pol_angle_deg * np.pi / 180))
                             Py_Beam[0] = float(pol_fraction * np.sin(pol_angle_deg * np.pi / 180))
                             Pz_Beam[0] = float(0)
@@ -691,6 +704,10 @@ def convert_pyroot(input_file_path, args, final_state_indices):
             tfile_out.Write()
             tfile_in.Close()
             tfile_out.Close()
+            print(f"{num_events_tot} total events")
+            print(f"{num_events} selected events")
+            print(f"{num_events_weighted} weighted events")
+            print(f"{num_events_polarized} polarized events")
 
 
 def convert_uproot(input_files, args, final_state_indices):
