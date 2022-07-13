@@ -247,7 +247,7 @@ this option for more information)''')
         args.prefix = "tree_" + args.prefix
 
     mode = 2
-    number_regex = re.compile(".*(\d{6}).*")
+    number_regex = re.compile(".*0?(\d{5}).*")
     keywords = ['AMO', 'PARA_0', 'PERP_45', 'PERP_90', 'PARA_135']
     merged_files = []
     if args.exclude:
@@ -294,7 +294,7 @@ def merge_RCDB(args, keywords):
     db = rcdb.RCDBProvider(connection)
     input_file_numbers = []
     input_file_paths = []
-    number_regex = re.compile(".*(\d{6}).*")
+    number_regex = re.compile(".*0?(\d{5}).*")
     for child in args.input_path.iterdir():
         match_group = number_regex.search(child.name)
         if match_group and child.is_file():
