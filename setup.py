@@ -5,7 +5,7 @@ import os
 
 AMPTOOLS_HOME = os.environ["AMPTOOLS_HOME"]
 ROOT_HOME = os.environ["ROOTSYS"]
-SRC = "/raid2/nhoffman/AmpToolsTools/src/ampwrapper"
+SRC = "src/ampwrapper"
 
 amptools_extension = Extension(
         name="FitResults",
