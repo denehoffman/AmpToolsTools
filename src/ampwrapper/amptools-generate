@@ -183,7 +183,7 @@ def main():
                         out_string += "Positive"
                     else:
                         out_string += "Negative"
-                    out_string += f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} {' '.join(tag.split('@')[1:])}\n"
+                    out_string += f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} {' '.join(tag.split('@')[1:])}"
                     if tag.split('@')[1] == "Piecewise":
                         nbins = tag.split('@')[4]
                         suffix = tag.split('@')[6]
@@ -194,16 +194,19 @@ def main():
                             param_tags = ["Mag", "Phi"]
                         for i in range(int(nbins)):
                             amplitudes_to_fix.add(f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}")
-                            piecewise_params.add(f"bin_{i}_{param_tags[0]}_{suffix}")
-                            piecewise_params.add(f"bin_{i}_{param_tags[1]}_{suffix}")
-                            out_string += f"[pcwsBin_{i}{param_tags[0]}{suffix}] [pcwsBin_{i}{param_tags[1]}{suffix}]"
+                            piecewise_params.add(f"pcwsBin_{i}{param_tags[0]}{suffix}")
+                            piecewise_params.add(f"pcwsBin_{i}{param_tags[1]}{suffix}")
+                            out_string += f" [pcwsBin_{i}{param_tags[0]}{suffix}] [pcwsBin_{i}{param_tags[1]}{suffix}]"
+                    out_string += "\n"
     if piecewise_params:
-        out_string += "\n# Piecewise Parameters\n"
+        temp_out_string = "\n# Piecewise:\n"
         for piecewise_param in piecewise_params:
             if "Re" in piecewise_param or "Im" in piecewise_param or "Mag" in piecewise_param:
-                out_string += f"parameter {piecewise_param} @uniform\n"
+                temp_out_string += f"parameter {piecewise_param} @uniform\n"
             else:
-                out_string += f"parameter {piecewise_param} @polaruniform\n"
+                temp_out_string += f"parameter {piecewise_param} @polaruniform\n"
+        temp_out_string += "\n# Other:\n"
+        out_string = out_string.replace("# Parameters", f"# Paramters\n{temp_out_string}")
 
 
     # Write Initialization
