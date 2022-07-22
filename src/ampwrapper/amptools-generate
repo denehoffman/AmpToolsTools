@@ -67,9 +67,10 @@ def main():
     
     # Write Parameters
     out_string += "\n# Parameters\n"
-    out_string += f"parameter polScale{pol_tags[0]} 1.0 fixed\n"
-    for pol in pol_tags[1:]:
-        out_string += f"parameter polScale{pol} 1.0\n"
+    if args.pol_files:
+        out_string += f"parameter polScale{pol_tags[0]} 1.0 fixed\n"
+        for pol in pol_tags[1:]:
+            out_string += f"parameter polScale{pol} 1.0\n"
 
     # Write Loops
     if args.pol_files:
@@ -89,13 +90,14 @@ def main():
             for pol in pol_tags:
                 file_loop += f" @{file_type}{pol}"
             out_string += f"{file_loop}\n"
-
         if args.add_pol_info:
             polang_loop = "loop LOOPPOLANG"
             polval_loop = "loop LOOPPOLVAL"
             for pol in pol_tags:
                 polang_loop += f" polAngle{pol}"
                 polval_loop += f" polVal{pol}"
+            out_string += f"{polang_loop}\n"
+            out_string += f"{polval_loop}\n"
     
     # Write Data Readers
     if args.pol_files:
@@ -132,6 +134,8 @@ def main():
         out_string += f"sum {reaction} NegativeIm\n"
 
     # Write Amplitudes
+    piecewise_params = set()
+    amplitudes_to_fix = set()
     out_string += "\n# Amplitudes\n"
     max_l = max([int(amp.split("/")[0]) for amp in args.amplitudes])
     amp_dict = {}
@@ -180,6 +184,27 @@ def main():
                     else:
                         out_string += "Negative"
                     out_string += f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} {' '.join(tag.split('@')[1:])}\n"
+                    if tag.split('@')[1] == "Piecewise":
+                        nbins = tag.split('@')[4]
+                        suffix = tag.split('@')[6]
+                        param_type = tag.split('@')[7]
+                        if param_type == "ReIm":
+                            param_tags = ["Re", "Im"]
+                        else:
+                            param_tags = ["Mag", "Phi"]
+                        for i in range(int(nbins)):
+                            amplitudes_to_fix.add(f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}")
+                            piecewise_params.add(f"bin_{i}_{param_tags[0]}_{suffix}")
+                            piecewise_params.add(f"bin_{i}_{param_tags[1]}_{suffix}")
+                            out_string += f"[pcwsBin_{i}{param_tags[0]}{suffix}] [pcwsBin_{i}{param_tags[1]}{suffix}]"
+    if piecewise_params:
+        out_string += "\n# Piecewise Parameters\n"
+        for piecewise_param in piecewise_params:
+            if "Re" in piecewise_param or "Im" in piecewise_param or "Mag" in piecewise_param:
+                out_string += f"parameter {piecewise_param} @uniform\n"
+            else:
+                out_string += f"parameter {piecewise_param} @polaruniform\n"
+
 
     # Write Initialization
     out_string += "\n# Initialize Amplitudes\n"
@@ -191,19 +216,33 @@ def main():
             if R > 0:
                 out_string += "Positive"
                 out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} polar"
-                if need_pos_real:
-                    out_string += " @uniform 0.0 real\n"
-                    need_pos_real = False
+                if f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}" in amplitudes_to_fix:
+                    if need_pos_real:
+                        out_string += " 1.0 0.0 fixed\n"
+                        need_pos_real = False
+                    else:
+                        out_string += " 1.0 0.0 fixed\n"
                 else:
-                    out_string += " @uniform @polaruniform\n"
+                    if need_pos_real:
+                        out_string += " @uniform 0.0 real\n"
+                        need_pos_real = False
+                    else:
+                        out_string += " @uniform @polaruniform\n"
             else:
                 out_string += "Negative"
                 out_string += f"Re::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} polar"
-                if need_neg_real:
-                    out_string += " @uniform 0.0 real\n"
-                    need_neg_real = False
+                if f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]}" in amplitudes_to_fix:
+                    if need_neg_real:
+                        out_string += " 1.0 0.0 fixed\n"
+                        need_neg_real = False
+                    else:
+                        out_string += " 1.0 0.0 fixed\n"
                 else:
-                    out_string += " @uniform @polaruniform\n"
+                    if need_neg_real:
+                        out_string += " @uniform 0.0 real\n"
+                        need_neg_real = False
+                    else:
+                        out_string += " @uniform @polaruniform\n"
 
     # Write Constraints
     out_string += "\n# Constrain Amplitudes\n"
