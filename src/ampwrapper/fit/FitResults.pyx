@@ -16,6 +16,9 @@ cdef extern from "FitResults.h":
         pair[double, double] phaseDiff(string& amp1, string& amp2)
         complex[double] productionParameter(string& ampName)
         vector[string] ampList()
+        vector[string] parNameList()
+        double parValue(string& parName)
+        double parError(string& parName)
 
 cdef class CyFitResults:
     cdef FitResults *cobj
@@ -45,6 +48,15 @@ cdef class CyFitResults:
 
     def ampList(self):
         return self.cobj.ampList()
+
+    def parNameList(self):
+        return self.cobj.parNameList()
+
+    def parValue(self, par):
+        return self.cobj.parValue(par)
+
+    def parError(self, par):
+        return self.cobj.parError(par)
 
 
 @contextmanager
@@ -106,3 +118,15 @@ class FitResultsWrapper:
     def ampList(self):
         with stdout_redirected():
             return self.fitobj.ampList()
+
+    def parNameList(self):
+        with stdout_redirected():
+            return self.fitobj.parNameList()
+
+    def parValue(self, par):
+        with stdout_redirected():
+            return self.fitobj.parValue(par.encode('utf-8'))
+
+    def parError(self, par):
+        with stdout_redirected():
+            return self.fitobj.parError(par.encode('utf-8'))
