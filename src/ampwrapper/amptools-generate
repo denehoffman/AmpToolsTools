@@ -10,7 +10,7 @@ import json
 
 def main():
     env_path = get_environment()
-    description = DEFAULT("""This script generates an AmpTools configuration file. Supply Z(L,M) amplitudes in the format L/M/R (separated by backslashes) where "R" is the reflectivity (+1, -1, or blank for both positive and negative). For example, "$ amptools-generate 0/0/+1" would produce an S-wave with positive reflectivity while "$ amptools-generate 1/-1/ 2/2/-1" would produce P-waves with M=-1 and both reflectivities and a D-wave with M=+2 and negative reflectivity. You can also leave the M space blank to generate all possible moments, so "0//" is shorthand for both positive and negative S-waves and "1//1" would generate all P-waves with positive reflectivity. Optionally, one may add a tag onto a particular amplitude or set of amplitudes with L/M/R@TAG. The tag can also be formatted as @ampname@Amplitude@argument@argument... to include a named amplitude (for mass-dependent fits). For instance, 2/1/1@f21270@BreitWigner@1.2755@0.1867@2@2@3 would generate a Breit-Wigner with a 1275.5 MeV mass and 186.7 MeV width (the last three arguments are spin and the index of the daughter particles).""", replace_whitespace=False)
+    description = DEFAULT("""This script generates an AmpTools configuration file. Supply Z(L,M) amplitudes in the format (r)L/M/R (separated by backslashes) where "R" is the reflectivity (+1, -1, or blank for both positive and negative). Additionally, prefixing with an "r" (like "r0/0/+") will make the wave purely real (if no waves are prefixed in a sum, one of them will be selected in order of lowest L). For example, "$ amptools-generate 0/0/+1" would produce an S-wave with positive reflectivity while "$ amptools-generate 1/-1/ 2/2/-1" would produce P-waves with M=-1 and both reflectivities and a D-wave with M=+2 and negative reflectivity. You can also leave the M space blank to generate all possible moments, so "0//" is shorthand for both positive and negative S-waves and "1//1" would generate all P-waves with positive reflectivity. Optionally, one may add a tag onto a particular amplitude or set of amplitudes with L/M/R@TAG. The tag can also be formatted as @ampname@Amplitude@argument@argument... to include a named amplitude (for mass-dependent fits). For instance, 2/1/1@f21270@BreitWigner@1.2755@0.1867@2@2@3 would generate a Breit-Wigner with a 1275.5 MeV mass and 186.7 MeV width (the last three arguments are spin and the index of the daughter particles).""", replace_whitespace=False)
     parser = argparse.ArgumentParser(description=description,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('amplitudes', nargs="+", help="list of amplitudes to include, formatted as L/M/R")
@@ -137,29 +137,31 @@ def main():
     piecewise_params = set()
     amplitudes_to_fix = set()
     out_string += "\n# Amplitudes\n"
-    max_l = max([int(amp.split("/")[0]) for amp in args.amplitudes])
+    max_l = max([int(amp.split("/")[0].replace("r", "")) for amp in args.amplitudes])
     amp_dict = {}
     for L in range(max_l + 1):
-        MRTs = set()
-        for M, R_tag in [amp.split("/")[1:] for amp in args.amplitudes if int(amp.split("/")[0]) == L]:
+        rMRTs = set()
+        for amp in [amp for amp in args.amplitudes if int(amp.split("/")[0].replace("r", "")) == L]:
+            M, R_tag = amp.split("/")[1:]
             R = R_tag.split("@")[0]
             tag = ""
+            real = "r" in amp.split("/")[0]
             if len(R_tag.split("@")) > 1:
                 tag = "@".join(R_tag.split("@")[1:])
             if M == "":
                 for i in range(-L, L + 1):
                     if R == "1" or R == "+1" or R == "+" or R == "":
-                        MRTs.add((i, 1, tag))
+                        rMRTs.add((real, i, 1, tag))
                     if R == "-" or R == "-1" or R == "":
-                        MRTs.add((i, -1, tag))
+                        rMRTs.add((real, i, -1, tag))
             elif -L <= int(M) <= L:
                 if R == "1" or R == "+1" or R == "+" or R == "":
-                    MRTs.add((int(M), +1, tag))
+                    rMRTs.add((real, int(M), +1, tag))
                 if R == "-" or R == "-1" or R == "":
-                    MRTs.add((int(M), -1, tag))
-        amp_dict[str(L)] = list(reversed(sorted(MRTs)))
-    for L, MRTs in amp_dict.items():
-        for M, R, tag in MRTs:
+                    rMRTs.add((real, int(M), -1, tag))
+        amp_dict[str(L)] = list(reversed(sorted(rMRTs)))
+    for L, rMRTs in amp_dict.items():
+        for real, M, R, tag in rMRTs:
             for part, re in zip(["Re", "Im"], [True, False]):
                 out_string += f"amplitude {reaction}::"
                 if R > 0:
@@ -200,21 +202,21 @@ def main():
                     out_string += "\n"
     if piecewise_params:
         temp_out_string = "\n# Piecewise:\n"
-        for piecewise_param in piecewise_params:
+        for piecewise_param in sorted(list(piecewise_params)):
             if "Re" in piecewise_param or "Im" in piecewise_param or "Mag" in piecewise_param:
                 temp_out_string += f"parameter {piecewise_param} @uniform\n"
             else:
                 temp_out_string += f"parameter {piecewise_param} @polaruniform\n"
         temp_out_string += "\n# Other:\n"
-        out_string = out_string.replace("# Parameters", f"# Paramters\n{temp_out_string}")
+        out_string = out_string.replace("# Parameters", f"# Parameters\n{temp_out_string}")
 
 
     # Write Initialization
     out_string += "\n# Initialize Amplitudes\n"
     need_pos_real = True
     need_neg_real = True
-    for L, MRTs in amp_dict.items():
-        for M, R, tag in MRTs:
+    for L, rMRTs in amp_dict.items():
+        for real, M, R, tag in rMRTs:
             out_string += f"initialize {reaction}::"
             if R > 0:
                 out_string += "Positive"
@@ -226,7 +228,7 @@ def main():
                     else:
                         out_string += " 1.0 0.0 fixed\n"
                 else:
-                    if need_pos_real:
+                    if need_pos_real or real:
                         out_string += " @uniform 0.0 real\n"
                         need_pos_real = False
                     else:
@@ -241,7 +243,7 @@ def main():
                     else:
                         out_string += " 1.0 0.0 fixed\n"
                 else:
-                    if need_neg_real:
+                    if need_neg_real or real:
                         out_string += " @uniform 0.0 real\n"
                         need_neg_real = False
                     else:
@@ -249,8 +251,8 @@ def main():
 
     # Write Constraints
     out_string += "\n# Constrain Amplitudes\n"
-    for L, MRTs in amp_dict.items():
-        for M, R, tag in MRTs:
+    for L, rMRTs in amp_dict.items():
+        for real, M, R, tag in rMRTs:
             # Re <-> Im constraint
             out_string += "constrain"
             out_string += f" {reaction}::"
@@ -284,8 +286,8 @@ def main():
     # Write Scales
     if args.pol_files:
         out_string += "\n# Scale Amplitudes\n"
-        for L, MRTs in amp_dict.items():
-            for M, R, tag in MRTs:
+        for L, rMRTs in amp_dict.items():
+            for real, M, R, tag in rMRTs:
                 out_string += "scale"
                 out_string += f" {reaction}::"
                 if R > 0:
