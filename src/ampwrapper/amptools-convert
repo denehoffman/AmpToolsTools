@@ -569,7 +569,10 @@ def convert_pyroot(input_file_path, args, final_state_indices):
                 # it is supposed to be positive here, since we are boosting
                 # away from the beam direction to get to the COM, we would
                 # usually make the boost with -(Beam + Target).BoostVector()
-                beam = com_boost * event.Thrown_Beam__P4
+                try:
+                    beam = com_boost * event.Thrown_Beam__P4
+                except AttributeError:
+                    beam = com_boost * event.ThrownBeam__P4
                 E_Beam[0] = float(beam.E())
                 Px_Beam[0] = float(beam.Px())
                 Py_Beam[0] = float(beam.Py())
