@@ -40,7 +40,11 @@ setup(
              SRC + "/amptools-search",
              SRC + "/amptools-select-thrown-topology",
              SRC + "/amptools-study",
-             SRC + "/amptools-view-thrown-topologies"],
+             SRC + "/amptools-view-thrown-topologies",
+             SRC + "/amptools-PhiPi-cfg",
+             SRC + "/amptools-PhiPi-fit",
+             SRC + "/amptools-PhiPi-result",
+             SRC + "/amptools-PhiPi-plot"],
     install_requires=[
         'numpy',
         'cython',

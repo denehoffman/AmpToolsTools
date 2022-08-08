@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+import numpy as np
+import scipy.stats as st
+import json
+from simple_term_menu import TerminalMenu
+from ampwrapper.utils import get_environment, wrap, list_selector, DEFAULT
+import argparse
+import sys
+import pandas as pd
+from pathlib import Path
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+import re
+
+
+def main(args):
+    env_path = get_environment()
+    
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    if not env.get('studies'):
+        print(wrap("You must initialize at least one AmpTools study using amptools-study!"))
+        sys.exit(1) 
+    
+    if args.study:
+        study = env['studies'][args.study]
+        if not study.get('results'):
+            print(wrap(f"The study {args.study} has not been fit yet!"))
+            sys.exit(1)
+    else:
+        fit_studies = []
+        for study_name, study in env['studies'].items():
+            if study.get('results'):
+                fit_studies.append(study_name)
+        args.study, cancel = list_selector(fit_studies)
+        if cancel:
+            print(wrap("User cancelled operation!"))
+            sys.exit(1)
+        study = env['studies'][args.study] 
+    res_config, cancel = list_selector(study['results'])
+    if cancel:
+        sys.exit(0)
+    
+    res_file = Path(study['directory']) / f"{res_config}_results.csv"
+    out_file = Path(study['directory']) / f"plot_{Path(res_file).stem}.pdf"
+    df = pd.read_csv(res_file)
+    centers = (np.array(study['edges'][1:]) + np.array(study['edges'][:-1]))/2
+    df['center'] = centers[df['bin']]
+    df = df.astype({column: complex for column in df.columns if column.endswith("@amp")})
+    bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
+    print(df)
+    best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
+    print(best_df)
+    best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
+    print(best_df)
+    
+    ### Get amplitude info and names: ..._m.group(0)=amplitude key, group(1)=J, group(2)=M, group(3)=L, group(4)=R, group(5)=identifier
+    # get amplitudes names
+    amp_int_m = list(filter(None, [re.search("^AMP_(\d)([+|-]\d)[+](\d)([+|-]\d)(\w*)@int$", col) for col in df.columns]))
+    amp_JMLs = set(([m.group(1, 2, 3) for m in amp_int_m]))
+    with PdfPages(out_file) as pdf:
+        for JML in amp_JMLs:
+            # Get amplitudes with specific JML
+            amplitudes_to_plot_m = list(sorted(filter(lambda m: m.group(1, 2, 3) == JML, amp_int_m), key=lambda m: m.group(3)))
+            if amplitudes_to_plot_m:
+                J = int(JML[0])
+                M = int(JML[1])
+                L = int(JML[2])
+                print(f"Plotting: best J={J} M={M} L={L} histogram")
+                plt.figure(figsize=(10, 6))
+                for amp_m in amplitudes_to_plot_m:
+                    amp_name = amp_m.group(0)
+                    R = int(amp_m.group(4))
+                    plt.errorbar(best_df['center'], best_df[amp_name + "@acc"], best_df[amp_name + "@acc@err"], color=('red' if R > 0 else 'blue'), fmt='o', label=("+" if R > 0 else "-") + " Reflectivity")
+                plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int@acc'], histtype='step', color='black', label="Total")
+                plt.title(f"J = {J} M = {M} L={L}")
+                plt.ylabel("Intensity")
+                plt.ylim(ymin=0)
+                plt.legend()
+                pdf.savefig()
+                plt.close()
+        for amp_m in amp_int_m:
+            print(f"Plotting: {amp_m.group(0)} violin plot")
+            plt.figure(figsize=(10, 6))
+            data = [bin_df[amp_m.group(0) + "@acc"].to_numpy() for bin_df in bin_dfs]
+            for i, sub_data in enumerate(data):
+                if sub_data.size == 0: # all fits failed:
+                    data[i] = np.array([0])
+            totals = [bin_df['total@int@acc'].to_numpy() for bin_df in bin_dfs]
+            for i, sub_data in enumerate(totals):
+                if sub_data.size == 0: # all fits failed:
+                    totals[i] = np.array([0])
+            plt.violinplot(data, positions=centers, widths=np.diff(centers)[0]*2)
+            plt.violinplot(totals, positions=centers, widths=np.diff(centers)[0]*2) 
+            plt.title(amp_m.group(0) + "@acc")
+            plt.ylim(ymin=0)
+            pdf.savefig()
+            plt.close()
+        for amp_m in amp_int_m:
+            print(f"Plotting: {amp_m.group(0)} phase plot")
+            plt.figure(figsize=(10, 6))
+            amp_name = amp_m.group(0).replace("@int", "@amp")
+            plt.scatter(best_df["center"], np.abs(np.angle(best_df[amp_name])))
+            plt.title(amp_m.group(0) + " Phase")
+            # plt.ylim(-np.pi, np.pi)
+            plt.ylim(0, np.pi) # only the phase difference matters maybe?
+            pdf.savefig()
+            plt.close()
+        for i_bin in range(study['nbins']):
+            bin_df = bin_dfs[i_bin]
+            best_row = best_df.loc[best_df['bin'] == i_bin]
+            if not bin_df.empty:
+                print(f"Plotting: Bin {i_bin} amplitude plot")
+                amp_columns = [column for column in bin_df.columns if column.endswith("@amp")]
+                fig, axes = plt.subplots(nrows=int(np.ceil(np.sqrt(len(amp_columns)))), ncols=int(np.ceil(np.sqrt(len(amp_columns)))))
+                for ind, amp_m in zip(np.ndindex(axes.shape), amp_int_m):
+                    amp_name = amp_m.group(0).replace("@int", "@amp")
+                    max_mag = max(np.amax(np.abs(bin_df[amp_name])), 0.1)
+                    X, Y = np.mgrid[-max_mag:max_mag:100j, -max_mag:max_mag:100j]
+                    positions = np.vstack([X.ravel(), Y.ravel()])
+                    values = np.vstack([np.real(bin_df[amp_name]), np.imag(bin_df[amp_name])])
+                    try:
+                        kernel = st.gaussian_kde(values)
+                        f = np.reshape(kernel(positions).T, X.shape)
+                        axes[ind].contour(X, Y, f, levels=4, colors='k')
+                        axes[ind].contourf(X, Y, f, levels=4, colors='Blues')
+                    except:
+                        pass # it's okay if we have too few points to plot this or they're weird and singular
+                    axes[ind].scatter(np.real(bin_df[amp_name]), np.imag(bin_df[amp_name]), color='k', marker=',')
+                    axes[ind].scatter(np.real(best_row[amp_name]), np.imag(best_row[amp_name]), color='r', marker='o')
+                    axes[ind].set_xlabel("Re")
+                    axes[ind].set_ylabel("Im")
+                    axes[ind].set_xlim(-max_mag, max_mag)
+                    axes[ind].set_ylim(-max_mag, max_mag)
+                    axes[ind].set_title(amp_name.replace("@amp", ""))
+                plt.tight_layout()
+                pdf.savefig(fig)
+                plt.close()
+        print("Plotting Likelihood Standard Deviation")
+        plt.figure(figsize=(10, 6))
+        data = np.array([[center, bin_df['likelihood'].std()] for center, bin_df in zip(centers, bin_dfs)])
+        ax = plt.gca()
+        ax.scatter(data[:,0], data[:,1])
+        ax.set_yscale('log')
+        plt.title(r"Likelihood $\sigma$")
+        pdf.savefig()
+        plt.close()
+    print(DEFAULT(f"Output saved to {out_file}"))
+
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s', '--study', help="study name")
+    args = parser.parse_args()
+
+    main(args)
+

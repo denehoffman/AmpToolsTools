@@ -1,0 +1,359 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import sys
+from pathlib import Path
+import numpy as np
+from simple_term_menu import TerminalMenu
+from ampwrapper.utils import HDOUBLE, get_environment, DEFAULT
+import json
+
+def main(args):
+    env_path = get_environment()
+    
+    
+    for amp in args.amplitudes:
+        if not len(amp.split("/")) == 3:
+            print(f"Improper formatting on amplitude \"{amp}\"!")
+            sys.exit(1)
+
+    reaction = args.name
+    particles = ["gamma", "proton", "ps", "vec_d1", "vec_d2"]
+   
+    polarizations = ["AMO", "PARA_0", "PERP_45", "PERP_90", "PARA_135"]
+    pol_tags = ["_AMO", "_000", "_045", "_090", "_135"]
+    pol_angles = ["0.0", "0.0", "45.0", "90.0", "135.0"]
+    pol_values = ["0.00001", "0.3519", "0.3374", "0.3303", "0.3375"]
+    if not args.amo:
+        polarizations = polarizations[1:]
+        pol_tags = pol_tags[1:]
+        pol_angles = pol_angles[1:]
+        pol_values = pol_values[1:]
+    file_types = ["DATA", "GEN", "ACC"]
+    if args.background:
+        file_types.append("BKG")
+
+    # Write Header 
+    HDOUBLE.width = 60
+    header = HDOUBLE("This is an AmpTools configuration file written by " \
+                     "amptools-cfg-PhiPi. Modify the contents with caution--" \
+                     "amptools-fit uses @tags to replace placeholder contents " \
+                     "like file paths, seeds, and initializations.") 
+    
+    out_string = "\n".join(["# " + line for line in header.split("\n")])
+    out_string += "\n# Code for generating this file:\n# amptools-cfg-PhiPi "
+    out_string = "\n# Code for generating this file:\n# amptools-cfg-PhiPi "
+
+    out_string += " ".join(sys.argv[1:])
+    out_string += "\n\n"
+    out_string += f"fit {reaction}\n"
+    out_string += f"reaction {reaction} {' '.join(particles)}\n"
+
+    # Write Constants
+    
+    out_string += "\n# Constants\n"
+    for pol, polval, polang in zip(pol_tags, pol_values, pol_angles):
+        out_string += f"define polVal{pol} {polval}\n"
+        out_string += f"define polAngle{pol} {polang}\n"
+    
+    # Write Parameters
+    out_string += "\n# Parameters\n"
+    out_string += f"parameter polScale{pol_tags[0]} 1.0 fixed\n"
+    for pol in pol_tags[1:]:
+        out_string += f"parameter polScale{pol} 1.0\n"
+
+    # Write Loops
+    
+    out_string += "\n# Loops\n"
+    reaction_loop = f"loop {reaction}"
+    scale_loop = "loop LOOPSCALE"
+    ni_loop = "loop LOOPNIFILE"
+    for pol in pol_tags:
+        reaction_loop += f" {reaction}{pol}"
+        scale_loop += f" [polScale{pol}]"
+        ni_loop += f" normint{pol}"
+    out_string += f"{reaction_loop}\n"
+    out_string += f"{scale_loop}\n"
+    out_string += f"{ni_loop}\n"
+    for file_type in file_types:
+        file_loop = f"loop LOOP{file_type}FILE"
+        for pol in pol_tags:
+            file_loop += f" @{file_type}{pol}"
+        out_string += f"{file_loop}\n"
+
+    polang_loop = "loop LOOPPOLANG"
+    polval_loop = "loop LOOPPOLVAL"
+    for pol in pol_tags:
+        polang_loop += f" polAngle{pol}"
+        polval_loop += f" polVal{pol}"
+    out_string += f"{polang_loop}\n"
+    out_string += f"{polval_loop}\n"
+
+    
+    # Write Data Readers
+    out_string += "\n# Paths\n"
+    out_string += f"normintfile {reaction} LOOPNIFILE\n"
+    out_string += f"data {reaction} ROOTDataReader LOOPDATAFILE\n"
+    out_string += f"genmc {reaction} ROOTDataReader LOOPGENFILE\n"
+    out_string += f"accmc {reaction} ROOTDataReader LOOPACCFILE\n"
+    if "BKG" in file_types:
+        out_string += f"bkgnd {reaction} ROOTDataReader LOOPBKGFILE\n"
+        
+    # Write Sums
+    out_string += "\n# Sums\n"
+    out_string += f"sum {reaction} PositiveRe\n"
+    out_string += f"sum {reaction} PositiveIm\n"
+    out_string += f"sum {reaction} NegativeRe\n"
+    out_string += f"sum {reaction} NegativeIm\n"
+    
+
+    # Write comments about amplitude naming method
+    out_string += "\n# Vec_ps_refl: Vector-Pseudoscalar amplitude in reflectivity basis"
+    out_string += "\n# Vec_ps_refl parameters"
+    out_string += '''
+    # argument 1 : spin
+    # argument 2 : spin_proj             
+    # argument 3 : l
+    # argument 4 : real (+1) or imaginary (-1) part
+    # argument 5 : 1 + (+1/-1) * P_gamma
+    # argument 6 : polarization angle
+    # argument 7 : beam properties config file or fixed polarization
+    # argument 8-11: (optional)dalitz parameters for 3-body vector decay'''
+    out_string += "\n \n# The amplitudes naming method in AmpTools"
+    out_string += '''
+    # [Positive/Negative][Re/Im]::Amp_[J][m][L][reflectivity] Vec_ps_refl argus
+    # [Positive/Negative]: "Positive Reflectivity" or "Negative Reflectivity"
+    # [Re/Im]: "Real part" or "Imaginary part"
+    # [J] spin: J 
+    # [m] spin projection: -J, -J+1, ... , J
+    # [L] orbital angular momentum between Phi and Pi0. The value depends on J and parity
+    # [Reflectivity] reflectivity should be consistent with [Positive/Negative]: 1, -1\n'''
+    
+
+    # Prepare for amplitues
+    J_list = [int(amp.split("/")[0]) for amp in args.amplitudes]
+    parity_list = [amp.split("/")[1] for amp in args.amplitudes]
+    L_list = [int(amp.split("/")[2]) for amp in args.amplitudes]
+
+    amp_dict = {}
+    # loop spin J
+    for i in range(len(J_list)):
+        spin_J = J_list[i]
+        parity = parity_list[i]
+        orbital_L = L_list[i]
+
+        # check corresponding orbital angular momentum
+        if spin_J == 1 and parity == "+":
+            if orbital_L != 0 and orbital_L != 2:
+                print("The input J/parity/L is not allowed for Phi-Pi")
+                exit(0)
+            natural = -1
+        elif spin_J == 1 and parity == "-":
+            if orbital_L != 1:
+                print("The input J/parity/L is not allowed for Phi-Pi")
+                exit(0)
+            natural = 1
+        elif spin_J == 0 and parity == "-":
+            if orbital_L != 1:
+                print("The input J/parity/L is not allowed for Phi-Pi")
+                exit(0)
+            natural = -1
+        elif spin_J == 2 and parity == "+":
+            if orbital_L != 2:
+                print("The input J/parity/L is not allowed for Phi-Pi")
+                exit(0)
+            natural = 1
+        elif spin_J == 2 and parity == "-":
+            if orbital_L != 1:
+                print("The input J/parity/L is not allowed for Phi-Pi")
+                exit(0)
+            natural = -1
+        elif spin_J == 3 and parity == "+":
+            if orbital_L != 2:
+                print("The input J/parity/L is not allowed for Phi-Pi")
+                exit(0)
+            natural = -1
+        else:
+            print("The input J/parity is not allowed or the code doesn't include it")
+            exit(0)
+
+        # the structure is 'spin parity natural', which can be splitted later
+        amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)] = []
+        # loop M
+        for l_value in L_list:
+            for m_value in range(-spin_J, spin_J+1):
+                # m, orbital angulat momentum, reflectivity, naturality
+                amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, l_value, 1))
+                amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, l_value, -1))
+
+    # Write Amplitudes
+    out_string += "\n# Amplitudes\n"
+    for spin_parity, MLRs in amp_dict.items():
+        # split "spin parity"
+        spin_J = int(spin_parity.split()[0])
+        parity = spin_parity.split()[1]
+        natural = spin_parity.split()[2]
+
+        # Write comment
+        out_string += f"# Spin {spin_J} ; Parity {parity} ; Natuality {natural}\n"
+
+        for m_value, l_value, Reflect_value in MLRs:
+            for part, real in zip(["Re", "Im"], [True, False]):
+                out_string += f"amplitude {reaction}::"
+                if Reflect_value > 0:
+                    out_string += "Positive"
+                else:
+                    out_string += "Negative"
+
+                out_string += f"{part}::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} Vec_ps_refl"
+                out_string += f" {spin_J} {m_value:+} {l_value}"
+
+                if real:
+                    out_string += " +1"
+                    if natural == "1":
+                        out_string += f" {Reflect_value:+}"
+                    else:
+                        out_string += f" {-Reflect_value:+}"
+                else: #imaginary
+                    out_string += " -1"
+                    if natural == "1":
+                        out_string += f" {-Reflect_value:+}"
+                    else:
+                        out_string += f" {Reflect_value:+}"
+                
+                out_string += " LOOPPOLANG LOOPPOLVAL"
+                out_string += "\n"
+            
+                # if len(tag.split('@')) > 1:
+                #     out_string += f"amplitude {reaction}::"
+                #     if R > 0:
+                #         out_string += "Positive"
+                #     else:
+                #         out_string += "Negative"
+                #     out_string += f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} {' '.join(tag.split('@')[1:])}\n"
+
+
+    # Write Initialization
+    out_string += "\n# Initialize Amplitudes\n"
+    # Only constrain the first 2 amplitudes to be real
+    need_pos_real = True
+    need_neg_real = True
+
+    for spin_parity, MLRs in amp_dict.items():
+        # split "spin parity"
+        spin_J = int(spin_parity.split()[0])
+        for m_value, l_value, Reflect_value in MLRs:
+            out_string += f"initialize {reaction}::"
+            if Reflect_value > 0:
+                out_string += "Positive"
+                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} polar"
+                if need_pos_real:
+                    out_string += " @uniform 0.0 real\n"
+                    need_pos_real = False
+                else:
+                    out_string += " @uniform @polaruniform\n"
+            else:
+                out_string += "Negative"
+                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} polar"
+                if need_neg_real:
+                    out_string += " @uniform 0.0 real\n"
+                    need_neg_real = False
+                else:
+                    out_string += " @uniform @polaruniform\n"
+
+    # Write Constraints
+    out_string += "\n# Constrain Amplitudes\n"
+    # write comments
+    out_string += "# 1. Re <-> Im coefficients are equal for the same reflectivity\n"
+    out_string += "# 2. Polarization constrain\n"
+
+    for spin_parity, MLRs in amp_dict.items():
+        # split "spin parity"
+        spin_J = int(spin_parity.split()[0])
+        for m_value, l_value, Reflect_value in MLRs:
+            
+            # Re <-> Im constrain
+            out_string += "constrain"
+            out_string += f" {reaction}::"
+            # real part
+            if Reflect_value > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}"
+            out_string += f" {reaction}::"
+            # imaginary part
+            if Reflect_value > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}\n"
+
+            # Polarization constrain
+            # PARA_0 part
+            out_string += "constrain"
+            out_string += f" {reaction}{pol_tags[0]}::"
+            if Reflect_value > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}"
+            # Looped part
+            out_string += f" {reaction}::"
+            if Reflect_value > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}\n"
+
+    # Write Scales
+    out_string += "\n# Scale Amplitudes\n"
+    for spin_parity, MLRs in amp_dict.items():
+        spin_J = int(spin_parity.split()[0])
+        for m_value, l_value, Reflect_value in MLRs:
+            out_string += "scale"
+            out_string += f" {reaction}::"
+            if Reflect_value > 0:
+                out_string += "Positive"
+            else:
+                out_string += "Negative"
+            out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+    
+    # End
+    out_string += "\n\n# END OF CONFIGURATION FILE"
+
+    if args.output == None:
+        print(out_string)
+    else:
+        file_name = args.output
+        with open(env_path, 'r') as env_file:
+            env = json.load(env_file)
+        env_parent = env_path.parent
+        config_path = env_parent / "configs"
+        config_path.mkdir(exist_ok=True)
+        file_path = config_path / f"{file_name}.cfg"
+        with open(file_path, 'w') as config_file:
+            config_file.write(out_string)
+        print(DEFAULT(f"An AmpTools Configuration has been created and saved to {str(file_path.resolve())}. Use amptools-fit to run a fit using this configuration."))
+
+    # file_name = args.output
+    # file_path = f"./{file_name}.cfg"
+    # with open(file_path, 'w') as config_file:
+    #          config_file.write(out_string)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    description = DEFAULT("""This script generates an AmpTools configuration file for Phi-Pi system. Supply vector-pseudoscalar amplitudes in the format J/parity/L (separated by backslashes) where "J", "parity", and "L" are the particle X spin(0,1,2), parity(+,-), and orbital anglular momentum between 2 decay daughters. Optionally, one may add a tag onto a particular amplitude or set of amplitudes with J/P/L@TAG. The tag can also be formatted as @ampname@Amplitude@argument@argument... to include a named amplitude (for mass-dependent fits). For instance, 2/1/1@f21270@BreitWigner@1.2755@0.1867@2@2@3 would generate a Breit-Wigner with a 1275.5 MeV mass and 186.7 MeV width (the last three arguments are spin and the index of the daughter particles).""", replace_whitespace=False)
+    parser = argparse.ArgumentParser(description=description,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('amplitudes', nargs="+", help="list of amplitudes to include, formatted as J/Parity/L")
+    parser.add_argument('-b', '--background', action="store_true", help="use a separate set of background files")
+    parser.add_argument('-o', '--output', help="name for output configuration file")
+    parser.add_argument('--amo', action="store_true", help="include amorphous runs")
+    parser.add_argument('-n', '--name', help="reaction name", default="default")
+    # parser.add_argument('--pol-files', action="store_true", help="use separate files for each polarization")
+    # parser.add_argument('--add-pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
+    
+    args = parser.parse_args()
+    main(args)

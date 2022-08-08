@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import json
+import ampwrapper.utils as amputils
+from ampwrapper.fit import FitResults
+import argparse
+import sys
+from pathlib import Path
+import shutil
+import re
+import enlighten
+from tqdm import tqdm
+import pandas as pd
+import subprocess
+from itertools import combinations
+import time
+
+
+def main(args, env):
+    # Validation
+    args.study, args.config = amputils.get_study_config(args.study, args.config)
+    print(amputils.DEFAULT(f"Initializing AmpTools fit on study {args.study} using {args.config} as the fit configuration"))
+    study = env['studies'][args.study]
+    fit_dir = Path(study['directory']) / args.config
+
+    # Collect results
+    res_path = Path(study['directory']) / f"{args.config}_results.csv"
+    df = pd.DataFrame()
+    for i_bin in tqdm(range(study['nbins'])):
+        bin_path = fit_dir / str(i_bin)
+        for it in [int(path.name) for path in bin_path.iterdir()]:
+            fit_path = Path(study['directory']) / f"{args.config}/{i_bin}/{it}/{amputils.get_config_reaction(args.config)}.fit"
+            if not fit_path.exists():
+                print(f"No fit file found for bin {i_bin} iteration {it}")
+                continue
+            wrapper = FitResults.FitResultsWrapper(str(fit_path))
+            amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
+            polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
+            res_dict = {"bin": i_bin, "iteration": it}
+            
+            # get intensity for each amplitude
+            for amp in amp_list:
+                # amp is "PositiveRe::AMP_J+M+L+Reflect"
+                if 'Re' in amp:
+                    # wave is "AMP_J+M+L+Reflect"
+                    wave = amp.split("::")[-1]
+                    if polarizations:
+                        wave_set = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp}" for pol in polarizations]
+                        wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
+                        wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp}"
+                    else:
+                        wave_set = [f"{amputils.get_config_reaction(args.config)}::{amp}"]
+                        wave_set.extend([f"{amputils.get_config_reaction(args.config)}::{amp.replace('Re', 'Im')}"])
+                        wave_pol0 = f"{amputils.get_config_reaction(args.config)}::{amp}"
+                    res_dict[f"{wave}@int"], res_dict[f"{wave}@int@err"] = wrapper.intensity(wave_set, False)
+                    res_dict[f"{wave}@int@acc"], res_dict[f"{wave}@int@acc@err"] = wrapper.intensity(wave_set, True)
+                    res_dict[f"{wave}@amp"] = wrapper.productionParameter(wave_pol0)
+            
+            # combine some amplitudes together
+            wave_list = [amp.split("::")[1].replace("AMP_", "") for amp in amp_list]
+                # wave format "J+M+L+Refelct"
+            JL_pair_list = np.unique([[int(wave[0]), int(wave[4])] for wave in wave_list], axis=0)
+            
+            for JL_pair in JL_pair_list:
+                J_value = JL_pair[0]
+                L_value = JL_pair[1]
+                wave_set = []
+                for amp in amp_list:
+                    if 'Re' in amp:
+                        # sum spin_projection M and Reflectivity
+                        if int(amp.split("::")[1].replace("AMP_", "")[0]) == J_value and int(amp.split("::")[1].replace("AMP_", "")[4]) == L_value:
+                            wave = amp.split("::")[-1]
+                            wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp}" for pol in polarizations])
+                            wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
+                
+                res_dict[f"J{J_value}L{L_value}@totint"], res_dict[f"J{J_value}L{L_value}@totint@err"] = wrapper.intensity(wave_set, False)
+                res_dict[f"J{J_value}L{L_value}@totint@acc"], res_dict[f"J{J_value}L{L_value}@totint@acc@err"] = wrapper.intensity(wave_set, True)
+            res_dict["total@int"], res_dict["total@int@err"] = wrapper.total_intensity(False)
+            res_dict["total@int@acc"], res_dict["total@int@acc@err"] = wrapper.total_intensity(True)
+            res_dict["likelihood"] = wrapper.likelihood()
+
+    
+            """
+            amp_pairs = combinations(amp_list, 2)
+            for amp1, amp2 in amp_pairs:
+                wave1 = amp1.split("::")[-1]
+                wave2 = amp2.split("::")[-1]
+                res_dict[f"{wave1}::{wave2}@phase"], res_dict[f"{wave1}::{wave2}@phase@err"] = wrapper.phaseDiff(amp1, amp2)
+            """
+            df = pd.concat([pd.DataFrame(res_dict, index=[0]), df], ignore_index=True)
+    df.to_csv(res_path, index=False)
+    if not study.get('results'):
+        study['results'] = []
+    if not args.config in study['results']:
+        study['results'].append(args.config)
+    with open(env_path, 'w') as env_file:
+        json.dump(env, env_file, indent=4)
+
+
+
+
+if __name__ == "__main__":
+    env_path = amputils.get_environment()
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    if not env.get('studies'):
+        print(amputils.wrap("You must initialize at least one AmpTools study using amptools-study!"))
+        sys.exit(1)
+    
+
+    config_keys = list(amputils.get_configs().keys())
+    study_keys = list(env['studies'].keys())
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("-s", "--study", choices=study_keys, help="name of AmpTools study to fit")
+    parser.add_argument("-c", "--config", choices=config_keys, help="name of AmpTools config to use in fit")
+    
+    args = parser.parse_args()
+
+    main(args, env)
