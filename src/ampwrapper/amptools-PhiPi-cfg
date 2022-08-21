@@ -43,14 +43,24 @@ def main(args):
     out_string = "\n".join(["# " + line for line in header.split("\n")])
     out_string += "\n# Code for generating this file:\n# amptools-cfg-PhiPi "
     out_string = "\n# Code for generating this file:\n# amptools-cfg-PhiPi "
+    
+    #whether spin1 has S,D-wave at the same time
+    JL_pair = [[int(amp.split("/")[0]), int(amp.split("/")[2])] for amp in args.amplitudes]
 
+    SDratio_exist = False
+    if ([1,0] in JL_pair) and ([1,2] in JL_pair):
+        SDratio_exist = True
+        spin1_S_position = JL_pair.index([1,0])
+        spin1_D_position = JL_pair.index([1,2])
+
+
+    # Start the file
     out_string += " ".join(sys.argv[1:])
     out_string += "\n\n"
     out_string += f"fit {reaction}\n"
     out_string += f"reaction {reaction} {' '.join(particles)}\n"
 
     # Write Constants
-    
     out_string += "\n# Constants\n"
     for pol, polval, polang in zip(pol_tags, pol_values, pol_angles):
         out_string += f"define polVal{pol} {polval}\n"
@@ -62,8 +72,11 @@ def main(args):
     for pol in pol_tags[1:]:
         out_string += f"parameter polScale{pol} 1.0\n"
 
+    if SDratio_exist:
+        out_string += "parameter DtoSratio 1.0\n"
+
+
     # Write Loops
-    
     out_string += "\n# Loops\n"
     reaction_loop = f"loop {reaction}"
     scale_loop = "loop LOOPSCALE"
@@ -134,8 +147,10 @@ def main(args):
     J_list = [int(amp.split("/")[0]) for amp in args.amplitudes]
     parity_list = [amp.split("/")[1] for amp in args.amplitudes]
     L_list = [int(amp.split("/")[2]) for amp in args.amplitudes]
+    
 
-    amp_dict = {}
+    amp_dict = {} # all the waves 
+    amp_dict_spin1D = {} # only spin 1 D-wave 
     # loop spin J
     for i in range(len(J_list)):
         spin_J = J_list[i]
@@ -177,14 +192,35 @@ def main(args):
             print("The input J/parity is not allowed or the code doesn't include it")
             exit(0)
 
-        # the structure is 'spin parity natural', which can be splitted later
-        amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)] = []
-        # loop M
-        for l_value in L_list:
+
+        if not SDratio_exist:
+            # the structure is 'spin parity natural', which can be splitted later
+            amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)] = []
+            # loop M
             for m_value in range(-spin_J, spin_J+1):
                 # m, orbital angulat momentum, reflectivity, naturality
-                amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, l_value, 1))
-                amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, l_value, -1))
+                amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, 1))
+                amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, -1))
+        else:
+            # spin 1 D wave 
+            if i==spin1_D_position:
+                amp_dict_spin1D[str(spin_J)+" "+str(parity)+" "+str(natural)] = []
+                for m_value in range(-spin_J, spin_J+1):
+                    # m, orbital angulat momentum, reflectivity, naturality
+                    amp_dict_spin1D[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, 1))
+                    amp_dict_spin1D[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, -1))
+
+            # amp_dict NOW include all amplitudes EXCEPT spin1-D
+            else:
+                amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)] = []
+                # loop M
+                for m_value in range(-spin_J, spin_J+1):
+                    # m, orbital angulat momentum, reflectivity, naturality
+                    amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, 1))
+                    amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, -1))
+            
+            
+
 
     # Write Amplitudes
     out_string += "\n# Amplitudes\n"
@@ -193,7 +229,6 @@ def main(args):
         spin_J = int(spin_parity.split()[0])
         parity = spin_parity.split()[1]
         natural = spin_parity.split()[2]
-
         # Write comment
         out_string += f"# Spin {spin_J} ; Parity {parity} ; Natuality {natural}\n"
 
@@ -231,6 +266,44 @@ def main(args):
                 #     else:
                 #         out_string += "Negative"
                 #     out_string += f"{part}::AMP_{L}{M:+}{R:+}{tag.split('@')[0]} {' '.join(tag.split('@')[1:])}\n"
+    
+    # if spin 1 S,D-waves exist at the same time, write spin 1 D amplitudes here
+    if SDratio_exist:
+        # just copy from above
+        for spin_parity, MLRs in amp_dict_spin1D.items():
+            # split "spin parity"
+            spin_J = int(spin_parity.split()[0])
+            parity = spin_parity.split()[1]
+            natural = spin_parity.split()[2]
+            # Write comment
+            out_string += f"# Spin {spin_J} ; Parity {parity} ; Natuality {natural}\n"
+
+            for m_value, l_value, Reflect_value in MLRs:
+                for part, real in zip(["Re", "Im"], [True, False]):
+                    out_string += f"amplitude {reaction}::"
+                    if Reflect_value > 0:
+                        out_string += "Positive"
+                    else:
+                        out_string += "Negative"
+
+                    out_string += f"{part}::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} Vec_ps_refl"
+                    out_string += f" {spin_J} {m_value:+} {l_value}"
+
+                    if real:
+                        out_string += " +1"
+                        if natural == "1":
+                            out_string += f" {Reflect_value:+}"
+                        else:
+                            out_string += f" {-Reflect_value:+}"
+                    else: #imaginary
+                        out_string += " -1"
+                        if natural == "1":
+                            out_string += f" {-Reflect_value:+}"
+                        else:
+                            out_string += f" {Reflect_value:+}"
+                    
+                    out_string += " LOOPPOLANG LOOPPOLVAL"
+                    out_string += "\n"
 
 
     # Write Initialization
@@ -305,19 +378,95 @@ def main(args):
             else:
                 out_string += "Negative"
             out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}\n"
+    
+    # Constrain S,D-wave coefficients the same; Then scale D-wave by D to S ratio.
+    if SDratio_exist:
+        out_string += "\n# Constrain S,D-wave coefficients the same; Then scale D-wave by D to S ratio\n"
+
+        for spin_parity, MLRs in amp_dict_spin1D.items():
+            # split "spin parity"
+            spin_J = int(spin_parity.split()[0])
+            for m_value, l_value, Reflect_value in MLRs:
+                if Reflect_value > 0:
+                    PosORNeg_string = "Positive"
+                else:
+                    PosORNeg_string = "Negative"
+                
+                # real part
+                out_string += "constrain"
+                out_string += f" {reaction}::" + PosORNeg_string
+                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}"
+                # spin 1 S-wave has only L different from spin 1 D-wave
+                out_string += f" {reaction}::" + PosORNeg_string
+                out_string += f"Re::AMP_{spin_J}{m_value:+}{0:+}{Reflect_value:+}\n"
+
+                # imaginary part
+                out_string += "constrain"
+                out_string += f" {reaction}::" + PosORNeg_string
+                out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}"
+                # spin 1 S-wave has only L different from spin 1 D-wave
+                out_string += f" {reaction}::" + PosORNeg_string
+                out_string += f"Im::AMP_{spin_J}{m_value:+}{0:+}{Reflect_value:+}\n"
+
 
     # Write Scales
     out_string += "\n# Scale Amplitudes\n"
     for spin_parity, MLRs in amp_dict.items():
         spin_J = int(spin_parity.split()[0])
         for m_value, l_value, Reflect_value in MLRs:
-            out_string += "scale"
-            out_string += f" {reaction}::"
             if Reflect_value > 0:
-                out_string += "Positive"
+                PosORNeg_string = "Positive"
             else:
-                out_string += "Negative"
+                PosORNeg_string = "Negative"
+            # Real Part
+            out_string += "scale"
+            out_string += f" {reaction}::" + PosORNeg_string
             out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+            # Imaginary Part
+            out_string += "scale"
+            out_string += f" {reaction}::" + PosORNeg_string
+            out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+
+    if SDratio_exist:
+        out_string += "\n# spin 1 D-wave should be scaled by both polarization and D-to-S ratio\n"
+        #Polarization scale
+        out_string += "#Polarization scale\n"
+        for spin_parity, MLRs in amp_dict_spin1D.items():
+            # split "spin parity"
+            spin_J = int(spin_parity.split()[0])
+            for m_value, l_value, Reflect_value in MLRs:
+                if Reflect_value > 0:
+                    PosORNeg_string = "Positive"
+                else:
+                    PosORNeg_string = "Negative"
+                # Real Part
+                out_string += "scale"
+                out_string += f" {reaction}::" + PosORNeg_string
+                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+                # Imaginary Part
+                out_string += "scale"
+                out_string += f" {reaction}::" + PosORNeg_string
+                out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+        #scale D-to-S ratio
+        out_string += "#scale D-to-S ratio\n"
+        for spin_parity, MLRs in amp_dict_spin1D.items():
+            # split "spin parity"
+            spin_J = int(spin_parity.split()[0])
+            for m_value, l_value, Reflect_value in MLRs:
+                if Reflect_value > 0:
+                    PosORNeg_string = "Positive"
+                else:
+                    PosORNeg_string = "Negative"
+                # Real Part
+                out_string += "scale"
+                out_string += f" {reaction}::" + PosORNeg_string
+                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} [DtoSratio]\n"
+                # Imaginary Part
+                out_string += "scale"
+                out_string += f" {reaction}::" + PosORNeg_string
+                out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} [DtoSratio]\n"
+
+
     
     # End
     out_string += "\n\n# END OF CONFIGURATION FILE"
