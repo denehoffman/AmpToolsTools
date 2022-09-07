@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--skip-fit", action="store_true", help="skip fitting and just collect available results from any previous fits")
     parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
     parser.add_argument("--no-mem", action="store_true", help="don't set a memory cap in the SLURM script (use for large bins where the generated MC is a huge file")
+    parser.add_argument("--time-limit", action="store_true", help="add 4-hour time limit to SLURM job")
     args = parser.parse_args()
     # np.random.seed(int(args.seed)) move this down
     queue = queues[args.queue]
@@ -98,7 +99,7 @@ def main():
                         print(amputils.wrap(f"Error locating the {match[0]} file for bin {i_bin}!"))
                         sys.exit(1)
                     if len(file_paths) > 1:
-                        print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
+                        print(amputils.wrap(f"Warning: More than one file matches {file_paths} for {match[0]} in bin {i_bin}!"))
                     config_text = config_text.replace(f"@{str(match)}", str(file_paths[0]))
             with open(config_it_path, 'w') as config_file:
                 config_file.write(config_text)
@@ -110,7 +111,8 @@ def main():
         lines.append(f"#SBATCH --partition={args.queue}\n")
         if not args.no_mem:
             lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
-        lines.append("#SBATCH --time=4:00:00\n")
+        if args.time_limit:
+            lines.append("#SBATCH --time=4:00:00\n")
         lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_%A.log\n")
         lines.append("#SBATCH --quiet\n")
         lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
