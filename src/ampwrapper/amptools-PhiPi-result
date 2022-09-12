@@ -26,6 +26,7 @@ def main(args, env):
 
     # Collect results
     res_path = Path(study['directory']) / f"{args.config}_results.csv"
+    res_path_best = Path(study['directory']) / f"{args.config}_results_best.csv"
     df = pd.DataFrame()
     for i_bin in tqdm(range(study['nbins'])):
         bin_path = fit_dir / str(i_bin)
@@ -36,6 +37,7 @@ def main(args, env):
                 continue
             wrapper = FitResults.FitResultsWrapper(str(fit_path))
             amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
+            par_list = [s.decode() for s in wrapper.parNameList()]
             polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
             res_dict = {"bin": i_bin, "iteration": it}
             
@@ -56,6 +58,7 @@ def main(args, env):
                     res_dict[f"{wave}@int"], res_dict[f"{wave}@int@err"] = wrapper.intensity(wave_set, False)
                     res_dict[f"{wave}@int@acc"], res_dict[f"{wave}@int@acc@err"] = wrapper.intensity(wave_set, True)
                     res_dict[f"{wave}@amp"] = wrapper.productionParameter(wave_pol0)
+                    res_dict[f"{wave}@amp_scaled"] = wrapper.scaledProductionParameter(wave_pol0)
             
             # combine some amplitudes together
             wave_list = [amp.split("::")[1].replace("AMP_", "") for amp in amp_list]
@@ -78,6 +81,9 @@ def main(args, env):
                 res_dict[f"J{J_value}L{L_value}@totint@acc"], res_dict[f"J{J_value}L{L_value}@totint@acc@err"] = wrapper.intensity(wave_set, True)
             res_dict["total@int"], res_dict["total@int@err"] = wrapper.total_intensity(False)
             res_dict["total@int@acc"], res_dict["total@int@acc@err"] = wrapper.total_intensity(True)
+            for par in par_list:
+                res_dict[par + "@par"] = wrapper.parValue(par)
+                res_dict[par + "@par@err"] = wrapper.parError(par)
             res_dict["likelihood"] = wrapper.likelihood()
 
     
@@ -90,6 +96,13 @@ def main(args, env):
             """
             df = pd.concat([pd.DataFrame(res_dict, index=[0]), df], ignore_index=True)
     df.to_csv(res_path, index=False)
+
+    # save the best result to another file
+    bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
+    best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
+    best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
+    best_df.to_csv(res_path_best, index=False)
+
     if not study.get('results'):
         study['results'] = []
     if not args.config in study['results']:

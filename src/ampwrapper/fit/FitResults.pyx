@@ -15,6 +15,7 @@ cdef extern from "FitResults.h":
         pair[double, double] total_intensity "intensity"(bint accCorrected)
         pair[double, double] phaseDiff(string& amp1, string& amp2)
         complex[double] productionParameter(string& ampName)
+        complex[double] scaledProductionParameter(string& ampName)
         vector[string] ampList()
         vector[string] parNameList()
         double parValue(string& parName)
@@ -45,6 +46,9 @@ cdef class CyFitResults:
 
     def productionParameter(self, amp):
         return self.cobj.productionParameter(amp)
+
+    def scaledProductionParameter(self, amp):
+        return self.cobj.scaledProductionParameter(amp)
 
     def ampList(self):
         return self.cobj.ampList()
@@ -114,6 +118,10 @@ class FitResultsWrapper:
     def productionParameter(self, amp):
         with stdout_redirected():
             return self.fitobj.productionParameter(amp.encode('utf-8'))
+        
+    def scaledProductionParameter(self, amp):
+        with stdout_redirected():
+            return self.fitobj.scaledProductionParameter(amp.encode('utf-8'))
 
     def ampList(self):
         with stdout_redirected():
