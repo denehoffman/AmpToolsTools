@@ -141,7 +141,7 @@ def main():
                 # starts with newline to allow for commenting out parameters without errors
                 for param_name, placeholder_value in init_params_re.findall(config_text):
                     fit_value = best_fit.get(f"{param_name}@par")
-                    config_text.replace(f"parameter {param_name} {placeholder_value}", f"parameter {param_name} {fit_value}")
+                    config_text = config_text.replace(f"parameter {param_name} {placeholder_value}", f"parameter {param_name} {fit_value}")
                 p = re.compile(r"@(\w*)_(\w*)")
                 matches = p.findall(config_text)
                 for match in matches:
