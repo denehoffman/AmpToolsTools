@@ -84,10 +84,10 @@ def main():
         print(amputils.wrap("Failed to find best iteration in any bin, make sure results have been collected!"))
         sys.exit(1)
     # Make directories
+    iterations = list(range(args.iterations))
     for i_bin in range(study['nbins']):
         bin_path = fit_dir / str(i_bin)
         bin_path.mkdir(exist_ok=True)
-        iterations = list(range(args.iterations))
         if args.append:
             existing_iteration_nums = [int(path.name) for path in bin_path.iterdir()]
             if existing_iteration_nums:
@@ -160,23 +160,23 @@ def main():
 
             with open(config_it_path, 'w') as config_file:
                 config_file.write(config_text)
-        # Dispatch jobs
-        with open(slurm_path, 'w') as slurm_file:
-            lines = ["#!/bin/tcsh -f\n"]
-            lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
-            lines.append(f"#SBATCH --partition={args.queue}\n")
-            lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
-            lines.append("#SBATCH --time=2:00:00\n")
-            lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_bootstrap_%A.log\n")
-            lines.append("#SBATCH --quiet\n")
-            lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
-            lines.append("pwd; hostname; date; whoami\n")
-            lines.append("echo $SLURM_ARRAY_TASK_ID\n")
-            lines.append(f"cd {study['directory']}/{args.config}_bootstrap{flags}/$1/$SLURM_ARRAY_TASK_ID\n")
-            lines.append(f"pwd\n")
-            lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
-            lines.append("echo DONE!; date")
-            slurm_file.writelines(lines)
+    # Dispatch jobs
+    with open(slurm_path, 'w') as slurm_file:
+        lines = ["#!/bin/tcsh -f\n"]
+        lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
+        lines.append(f"#SBATCH --partition={args.queue}\n")
+        lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
+        lines.append("#SBATCH --time=2:00:00\n")
+        lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_bootstrap_%A.log\n")
+        lines.append("#SBATCH --quiet\n")
+        lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
+        lines.append("pwd; hostname; date; whoami\n")
+        lines.append("echo $SLURM_ARRAY_TASK_ID\n")
+        lines.append(f"cd {study['directory']}/{args.config}_bootstrap{flags}/$1/$SLURM_ARRAY_TASK_ID\n")
+        lines.append(f"pwd\n")
+        lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
+        lines.append("echo DONE!; date")
+        slurm_file.writelines(lines)
 
     # Run fits
     if not args.skip_fit:

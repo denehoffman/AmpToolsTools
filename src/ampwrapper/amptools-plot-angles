@@ -3,7 +3,6 @@
 import numpy as np
 import json
 from ampwrapper.utils import get_environment
-import argparse
 import sys
 from pathlib import Path
 from tqdm import tqdm
@@ -47,10 +46,8 @@ def main():
                     beam = com_boost * beam_lab
                     recoil = com_boost * recoil_lab
                     p1 = com_boost * p1_lab
-                    p2 = com_boost * p2_lab
                     resonance = com_boost * resonance_lab
                     res_boost = ROOT.TLorentzRotation(-resonance.BoostVector())
-                    beam_res = res_boost * beam
                     recoil_res = res_boost * recoil
                     p1_res = res_boost * p1
                     z = -1. * recoil_res.Vect().Unit()

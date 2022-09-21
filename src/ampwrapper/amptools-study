@@ -3,7 +3,6 @@ import argparse
 from ampwrapper.utils import file_selector, get_environment, wrap, get_binning, split_mass, split_mass_halld_sim
 import sys
 from pathlib import Path
-import array
 import numpy as np
 import uproot
 import enlighten
@@ -21,7 +20,7 @@ def main():
 
     This script also divides the input files according to the
     provided binning.
-    
+
     If any of the paths are not provided, file pickers will open
     in a command line interface to allow for their selection
     from ROOT files stored in the environment's subdirectories
@@ -148,7 +147,7 @@ def main():
         env['studies'] = dict()
     env['studies'][args.name] = study
     with open(env_path, 'w') as env_file:
-        json.dump(env, env_file, indent=4) 
+        json.dump(env, env_file, indent=4)
 
 if __name__ == "__main__":
     main()

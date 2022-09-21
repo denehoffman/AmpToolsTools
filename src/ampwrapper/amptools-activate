@@ -3,9 +3,6 @@ from ampwrapper.utils import wrap, DEFAULT
 import argparse
 from pathlib import Path
 import json
-import os
-import logging
-import sys
 
 def setup(directory) -> None:
     """

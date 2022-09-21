@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-from ampwrapper.utils import get_environment, BOLD, wrap
+from ampwrapper.utils import get_environment, BOLD
 from pathlib import Path
 import shutil
 import os

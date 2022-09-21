@@ -9,11 +9,9 @@ import sys
 from pathlib import Path
 import shutil
 import re
-import enlighten
 from tqdm import tqdm
 import pandas as pd
 import subprocess
-from itertools import combinations
 import time
 
 def main():
@@ -51,10 +49,10 @@ def main():
     fit_dir = Path(study['directory']) / args.config
     fit_dir.mkdir(exist_ok=True)
     # Make directories
+    iterations = list(range(args.iterations))
     for i_bin in range(study['nbins']):
         bin_path = fit_dir / str(i_bin)
         bin_path.mkdir(exist_ok=True)
-        iterations = list(range(args.iterations))
         if args.append:
             existing_iteration_nums = [int(path.name) for path in bin_path.iterdir()]
             if existing_iteration_nums:
@@ -77,7 +75,7 @@ def main():
                     # the "1" at the end here ensures multiple tags on the same line don't all get the same value
                     config_text = config_text.replace("@uniform", str(np.random.uniform(0.0, 100.0)), 1)
                     config_text = config_text.replace("@polaruniform", str(np.random.uniform(0.0, 2 * np.pi)), 1)
-                p = re.compile("\s@(\w*)_(\w*)")
+                p = re.compile(r"\s@(\w*)_(\w*)")
                 matches = p.findall(config_text)
                 for match in matches:
                     file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
@@ -91,7 +89,7 @@ def main():
                     if len(file_paths) > 1:
                         print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
                     config_text = config_text.replace(f"@{match[0]}_{match[1]}", str(file_paths[0]))
-                p = re.compile("\s@(\w*)")
+                p = re.compile(r"\s@(\w*)")
                 matches = p.findall(config_text)
                 for match in [match for match in matches if str(match) != "tags"]:
                     file_paths = [file_path for file_path in (Path(study['directory']) / str(match)).iterdir() if file_path.stem.endswith(f"_{i_bin}")]
@@ -199,7 +197,7 @@ def main():
     if not args.config in study['results']:
         study['results'].append(args.config)
     with open(env_path, 'w') as env_file:
-        json.dump(env, env_file, indent=4) 
+        json.dump(env, env_file, indent=4)
 
 
 if __name__ == "__main__":
