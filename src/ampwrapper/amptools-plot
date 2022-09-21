@@ -51,7 +51,7 @@ def main():
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
     print(best_df)
     best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
-    if not best_df:
+    if best_df is None:
         print(wrap("No best fit found for any bins, make sure results have been collected!"))
         sys.exit(1)
     print(best_df)
