@@ -156,7 +156,16 @@ def main():
                     if len(file_paths) > 1:
                         print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
                     config_text = config_text.replace(f"@{match[0]}_{match[1]}", str(file_paths[0]))
-
+                p = re.compile(r"\s@(\w*)")
+                matches = p.findall(config_text)
+                for match in [match for match in matches if str(match) != "tags"]:
+                    file_paths = [file_path for file_path in (Path(study['directory']) / str(match)).iterdir() if file_path.stem.endswith(f"_{i_bin}")]
+                    if not file_paths:
+                        print(amputils.wrap(f"Error locating the {match[0]} file for bin {i_bin}!"))
+                        sys.exit(1)
+                    if len(file_paths) > 1:
+                        print(amputils.wrap(f"Warning: More than one file matches {file_paths} for {match[0]} in bin {i_bin}!"))
+                    config_text = config_text.replace(f"@{str(match)}", str(file_paths[0]))
             with open(config_it_path, 'w') as config_file:
                 config_file.write(config_text)
     # Dispatch jobs
@@ -168,7 +177,7 @@ def main():
             lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
         if args.time_limit:
             lines.append("#SBATCH --time=4:00:00\n")
-        lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_bootstrap_%A.log\n")
+        lines.append(f"#SBATCH --output={study['directory']}/{args.config}_bootstrap{flags}/log_{args.config}_bootstrap{flags}_%A.log\n")
         lines.append("#SBATCH --quiet\n")
         lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
         lines.append("pwd; hostname; date; whoami\n")
