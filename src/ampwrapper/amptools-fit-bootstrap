@@ -9,11 +9,9 @@ import sys
 from pathlib import Path
 import shutil
 import re
-import enlighten
 from tqdm import tqdm
 import pandas as pd
 import subprocess
-from itertools import combinations
 import time
 
 def main():
@@ -27,10 +25,10 @@ def main():
     with open(env_path, 'r') as env_file:
         env = json.load(env_file)
     if not env.get('configs'):
-        print(wrap("You must create at least one AmpTools configuration file using amptools-generate!"))
+        print(amputils.wrap("You must create at least one AmpTools configuration file using amptools-generate!"))
         sys.exit(1)
     if not env.get('studies'):
-        print(wrap("You must initialize at least one AmpTools study using amptools-study!"))
+        print(amputils.wrap("You must initialize at least one AmpTools study using amptools-study!"))
         sys.exit(1)
     config_keys = list(env['configs'].keys())
     study_keys = list(env['studies'].keys())
@@ -48,7 +46,7 @@ def main():
     args = parser.parse_args()
     if args.no_data:
         if not (args.gen or args.acc):
-            print(wrap("You must select at least one bootstrapping option between --gen or --acc if you choose --no-data!"))
+            print(amputils.wrap("You must select at least one bootstrapping option between --gen or --acc if you choose --no-data!"))
             sys.exit(1)
     queue = queues[args.queue]
 
@@ -67,6 +65,7 @@ def main():
     res_file = Path(study['directory']) / f"{args.config}_results.csv"
     fit_dir = Path(study['directory']) / f"{args.config}_bootstrap{flags}"
     fit_dir.mkdir(exist_ok=True)
+    slurm_path = Path(study['directory']) / f"dispatch_{args.config}_bootstrap{flags}.csh"
     if not res_file.exists():
         print(amputils.wrap("This configuration has not yet been fit for this study, run amptools-fit first!"))
         sys.exit(1)
@@ -76,9 +75,13 @@ def main():
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
     best_df = best_df.drop_duplicates(subset=['bin'])
     # Make sure there *is* a best fit in each bin
-    missing_bins = set(range(study['nbins'])) - set(best_df['bin'])
-    if missing_bins:
-        print(amputils.wrap(f"Missing fits for the following bins: {missing_bins}. Currently, this program will not run without a fit in each bin."))
+    if best_df:
+        missing_bins = set(range(study['nbins'])) - set(best_df['bin'])
+        if missing_bins:
+            print(amputils.wrap(f"Missing fits for the following bins: {missing_bins}. Currently, this program will not run without a fit in each bin."))
+            sys.exit(1)
+    else:
+        print(amputils.wrap("Failed to find best iteration in any bin, make sure results have been collected!"))
         sys.exit(1)
     # Make directories
     for i_bin in range(study['nbins']):
@@ -135,7 +138,12 @@ def main():
                         config_text = config_text.replace(original, replacement)
                     else:
                         found_all = True
-                p = re.compile("@(\w*)_(\w*)")
+                init_params_re = re.compile(r"(?:^|\n)(parameter \w+) ([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
+                # starts with newline to allow for commenting out parameters without errors
+                for param_name, placeholder_value in init_params_re.findall(config_text):
+                    fit_value = best_fit.get(f"{param_name}@par")
+                    config_text.replace(f"parameter {param_name} {placeholder_value}", f"parameter {param_name} {fit_value}")
+                p = re.compile(r"@(\w*)_(\w*)")
                 matches = p.findall(config_text)
                 for match in matches:
                     file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
@@ -152,24 +160,23 @@ def main():
 
             with open(config_it_path, 'w') as config_file:
                 config_file.write(config_text)
-    # Dispatch jobs
-    slurm_path = Path(study['directory']) / f"dispatch_{args.config}_bootstrap{flags}.csh"
-    with open(slurm_path, 'w') as slurm_file:
-        lines = ["#!/bin/tcsh -f\n"]
-        lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
-        lines.append(f"#SBATCH --partition={args.queue}\n")
-        lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
-        lines.append("#SBATCH --time=2:00:00\n")
-        lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_bootstrap_%A.log\n")
-        lines.append("#SBATCH --quiet\n")
-        lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
-        lines.append("pwd; hostname; date; whoami\n")
-        lines.append("echo $SLURM_ARRAY_TASK_ID\n")
-        lines.append(f"cd {study['directory']}/{args.config}_bootstrap{flags}/$1/$SLURM_ARRAY_TASK_ID\n")
-        lines.append(f"pwd\n")
-        lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
-        lines.append("echo DONE!; date")
-        slurm_file.writelines(lines)
+        # Dispatch jobs
+        with open(slurm_path, 'w') as slurm_file:
+            lines = ["#!/bin/tcsh -f\n"]
+            lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
+            lines.append(f"#SBATCH --partition={args.queue}\n")
+            lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
+            lines.append("#SBATCH --time=2:00:00\n")
+            lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_bootstrap_%A.log\n")
+            lines.append("#SBATCH --quiet\n")
+            lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
+            lines.append("pwd; hostname; date; whoami\n")
+            lines.append("echo $SLURM_ARRAY_TASK_ID\n")
+            lines.append(f"cd {study['directory']}/{args.config}_bootstrap{flags}/$1/$SLURM_ARRAY_TASK_ID\n")
+            lines.append(f"pwd\n")
+            lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
+            lines.append("echo DONE!; date")
+            slurm_file.writelines(lines)
 
     # Run fits
     if not args.skip_fit:
@@ -227,7 +234,7 @@ def main():
     if not args.config in study['bootstraps']:
         study['bootstraps'].append(args.config)
     with open(env_path, 'w') as env_file:
-        json.dump(env, env_file, indent=4) 
+        json.dump(env, env_file, indent=4)
 
 
 
