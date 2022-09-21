@@ -74,7 +74,7 @@ def main():
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
     best_df = best_df.drop_duplicates(subset=['bin'])
     # Make sure there *is* a best fit in each bin
-    if best_df:
+    if not best_df is None:
         missing_bins = set(range(study['nbins'])) - set(best_df['bin'])
         if missing_bins:
             print(amputils.wrap(f"Missing fits for the following bins: {missing_bins}. Currently, this program will not run without a fit in each bin."))
