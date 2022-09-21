@@ -24,13 +24,10 @@ def main():
 
     with open(env_path, 'r') as env_file:
         env = json.load(env_file)
-    if not env.get('configs'):
-        print(amputils.wrap("You must create at least one AmpTools configuration file using amptools-generate!"))
-        sys.exit(1)
     if not env.get('studies'):
         print(amputils.wrap("You must initialize at least one AmpTools study using amptools-study!"))
         sys.exit(1)
-    config_keys = list(env['configs'].keys())
+    config_keys = list(amputils.get_configs().keys())
     study_keys = list(env['studies'].keys())
     parser.add_argument("-s", "--study", choices=study_keys, help="name of AmpTools study to bootstrap")
     parser.add_argument("-c", "--config", choices=config_keys, help="name of AmpTools config to use in bootstrap")
