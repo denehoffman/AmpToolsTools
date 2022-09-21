@@ -36,6 +36,8 @@ def main():
     parser.add_argument("--seed", default=1, help="seed for randomization")
     parser.add_argument("--skip-fit", action="store_true", help="skip fitting and just collect available results from any previous fits")
     parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
+    parser.add_argument("--no-mem", action="store_true", help="don't set a memory cap in the SLURM script (use for large bins where the generated MC is a huge file")
+    parser.add_argument("--time-limit", action="store_true", help="add 4-hour time limit to SLURM job")
     # Bootstrap specific
     parser.add_argument("--no-data", action="store_true", help="(optional) skip bootstrapping on the data (and background, if applicable) file(s)")
     parser.add_argument("--gen", action="store_true", help="(optional) bootstrap generated Monte Carlo")
@@ -162,8 +164,10 @@ def main():
         lines = ["#!/bin/tcsh -f\n"]
         lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
         lines.append(f"#SBATCH --partition={args.queue}\n")
-        lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
-        lines.append("#SBATCH --time=2:00:00\n")
+        if not args.no_mem:
+            lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
+        if args.time_limit:
+            lines.append("#SBATCH --time=4:00:00\n")
         lines.append(f"#SBATCH --output={study['directory']}/{args.config}/log_{args.config}_bootstrap_%A.log\n")
         lines.append("#SBATCH --quiet\n")
         lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
