@@ -139,6 +139,10 @@ def main(args, env):
     bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
     best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
+    if best_df is None:
+        print(wrap("No best fit found for any bins, make sure results have been collected!"))
+        sys.exit(1)
+
     best_df.to_csv(res_path_best, index=False)
 
     if not study.get('results'):
