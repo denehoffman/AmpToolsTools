@@ -64,55 +64,57 @@ def main(args):
     # bin_dfs = [best_df.loc[best_df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     # print(best_df)
     
-    ### Get amplitude info and names: ..._m.group(0)=amplitude key, group(1)=J, group(2)=M, group(3)=L, group(4)=R, group(5)=identifier
-    # get amplitudes names
-    amp_int_m = list(filter(None, [re.search("^AMP_(\d)([+|-]\d)[+](\d)([+|-]\d)(\w*)@int$", col) for col in best_df.columns]))
-    amp_JMLs = set(([m.group(1, 2, 3) for m in amp_int_m]))
-    with PdfPages(out_file) as pdf:
-        for JML in amp_JMLs:
-            # Get amplitudes with specific JML
-            amplitudes_to_plot_m = list(sorted(filter(lambda m: m.group(1, 2, 3) == JML, amp_int_m), key=lambda m: m.group(3)))
-            # plot acceptance corrected intensity
-            if amplitudes_to_plot_m:
-                J = int(JML[0])
-                M = int(JML[1])
-                L = int(JML[2])
-                print(f"Plotting: best J={J} M={M} L={L} @acc histogram")
-                plt.figure(figsize=(10, 6))
-                for amp_m in amplitudes_to_plot_m:
-                    amp_name = amp_m.group(0)
-                    R = int(amp_m.group(4))
-                    plt.errorbar(best_df['center'], best_df[amp_name + "@acc"], best_df[amp_name + "@acc@err"], color=('red' if R > 0 else 'blue'), fmt='o', label=("+" if R > 0 else "-") + " Reflectivity")
-                plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int@acc'], histtype='step', color='black', label="Total")
-                plt.title(f"J = {J} M = {M} L={L}")
-                plt.ylabel("Acceptance Corrected Intensity")
-                plt.ylim(ymin=0)
-                plt.legend()
-                pdf.savefig()
-                plt.close()
-            # plot intensity
-            if amplitudes_to_plot_m:
-                J = int(JML[0])
-                M = int(JML[1])
-                L = int(JML[2])
-                print(f"Plotting: best J={J} M={M} histogram")
-                plt.figure(figsize=(10, 6))
-                for amp_m in amplitudes_to_plot_m:
-                    amp_name = amp_m.group(0)
-                    R = int(amp_m.group(4))
-                    plt.errorbar(best_df['center'], best_df[amp_name], best_df[amp_name + "@err"], color=('red' if R > 0 else 'blue'), fmt='o', label=("+" if R > 0 else "-") + " Reflectivity")
-                plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int'], histtype='step', color='black', label="Total")
-                plt.title(f"J = {J} M = {M} L={L}")
-                plt.ylabel("Intensity")
-                plt.ylim(ymin=0)
-                plt.legend()
-                pdf.savefig()
-                plt.close()
+    dict_m_letter = {'m2': "-2", 'm': "-1", '0': "0", 'p': "1", 'p2': "2"}
+    dict_l_letter = {'s': "0", 'p': "1", 'd':"2"}
 
-        for amp_m in amp_int_m:
-            print(f"Plotting: {amp_m.group(0)} violin plot")
+    # get amplitudes names
+    amp_list = [col for col in best_df.columns if col.endswith("@int")]
+    amp_list = [amp for amp in amp_list if amp[0]!='t'] # drop the 'total@int'
+    amp_list_to_plot = [amp for amp in amp_list if amp[0]=='p'] # only extract positive reflectivity amp
+    with PdfPages(out_file) as pdf:
+        for amp in amp_list_to_plot: #p1pms
+            J_value = int(amp[1])
+            if J_value > 1:
+                print('the code to extract M(spin projection) is designed only for -1, 0, 1')
+                exit(1)
+            M_value = int(dict_m_letter[amp[3]])
+            L_value = int(dict_l_letter[amp[4]])
+            
+            neg_amp = list(amp)
+            neg_amp[0]='m'
+            neg_amp=''.join(neg_amp)
+
+            # plot acceptance corrected intensity
+            print(f"Plotting: best J={J_value} M={M_value} L={L_value} @acc histogram")
             plt.figure(figsize=(10, 6))
-            data = [bin_df[amp_m.group(0) + "@acc"].to_numpy() for bin_df in bin_dfs]
+            plt.errorbar(best_df['center'], best_df[amp + "@acc"], best_df[amp + "@acc@err"], color='red', fmt='o', label='+ Reflectivity')
+            plt.errorbar(best_df['center'], best_df[neg_amp + "@acc"], best_df[neg_amp + "@acc@err"], color='blue', fmt='o', label='- Reflectivity')
+            plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int@acc'], histtype='step', color='black', label="Total")
+            plt.title(f"J = {J_value} M = {M_value} L={L_value}")        
+            plt.ylabel("Acceptance Corrected Intensity")
+            plt.ylim(ymin=0)
+            plt.legend()
+            pdf.savefig()
+            plt.close()
+            
+            # plot intensity
+            print(f"Plotting: best J={J_value} M={M_value} L={L_value} histogram")
+            plt.figure(figsize=(10, 6))
+            plt.errorbar(best_df['center'], best_df[amp], best_df[amp + "@err"], color='red', fmt='o', label='+ Reflectivity')
+            plt.errorbar(best_df['center'], best_df[neg_amp], best_df[neg_amp + "@err"], color='blue', fmt='o', label='- Reflectivity')
+            plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int'], histtype='step', color='black', label="Total")
+            plt.title(f"J = {J_value} M = {M_value} L={L_value}")                
+            plt.ylabel("Intensity")
+            plt.ylim(ymin=0)
+            plt.legend()
+            pdf.savefig()
+            plt.close()
+
+        # violin plot
+        for amp_m in amp_list:
+            print(f"Plotting: {amp_m} violin plot")
+            plt.figure(figsize=(10, 6))
+            data = [bin_df[amp_m + "@acc"].to_numpy() for bin_df in bin_dfs]
             for i, sub_data in enumerate(data):
                 if sub_data.size == 0: # all fits failed:
                     data[i] = np.array([0])
@@ -122,20 +124,23 @@ def main(args):
                     totals[i] = np.array([0])
             plt.violinplot(data, positions=centers, widths=np.diff(centers)[0]*2)
             plt.violinplot(totals, positions=centers, widths=np.diff(centers)[0]*2) 
-            plt.title(amp_m.group(0) + "@acc")
+            plt.title(amp_m + "@acc")
             plt.ylim(ymin=0)
             pdf.savefig()
             plt.close()
-        for amp_m in amp_int_m:
-            print(f"Plotting: {amp_m.group(0)} phase plot")
+
+        # phase plot    
+        for amp_m in amp_list:
+            print(f"Plotting: {amp_m} phase plot")
             plt.figure(figsize=(10, 6))
-            amp_name = amp_m.group(0).replace("@int", "@amp")
+            amp_name = amp_m.replace("@int", "@amp")
             plt.scatter(best_df["center"], np.abs(np.angle(best_df[amp_name])))
-            plt.title(amp_m.group(0) + " Phase")
+            plt.title(amp_m + " Phase")
             # plt.ylim(-np.pi, np.pi)
             plt.ylim(0, np.pi) # only the phase difference matters maybe?
             pdf.savefig()
             plt.close()
+
         # for i_bin in range(study['nbins']):
         #     bin_df = bin_dfs[i_bin]
         #     best_row = best_df.loc[best_df['bin'] == i_bin]
@@ -166,6 +171,7 @@ def main(args):
         #         plt.tight_layout()
         #         pdf.savefig(fig)
         #         plt.close()
+        
         print("Plotting Likelihood Standard Deviation")
         plt.figure(figsize=(10, 6))
         data = np.array([[center, bin_df['likelihood'].std()] for center, bin_df in zip(centers, bin_dfs)])

@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-import os
 import sys
-from pathlib import Path
-import numpy as np
-from simple_term_menu import TerminalMenu
 from ampwrapper.utils import HDOUBLE, get_environment, DEFAULT
 import json
 
@@ -73,7 +69,7 @@ def main(args):
         out_string += f"parameter polScale{pol} 1.0\n"
 
     if SDratio_exist:
-        out_string += "parameter DtoSratio 1.0\n"
+        out_string += "parameter dsratio 1.0\n"
 
 
     # Write Loops
@@ -114,10 +110,10 @@ def main(args):
         
     # Write Sums
     out_string += "\n# Sums\n"
-    out_string += f"sum {reaction} PositiveRe\n"
-    out_string += f"sum {reaction} PositiveIm\n"
-    out_string += f"sum {reaction} NegativeRe\n"
-    out_string += f"sum {reaction} NegativeIm\n"
+    out_string += f"sum {reaction} ImagNegSign\n"
+    out_string += f"sum {reaction} RealNegSign\n"
+    out_string += f"sum {reaction} ImagPosSign\n"
+    out_string += f"sum {reaction} RealPosSign\n"
     
 
     # Write comments about amplitude naming method
@@ -134,15 +130,16 @@ def main(args):
     # argument 8-11: (optional)dalitz parameters for 3-body vector decay'''
     out_string += "\n \n# The amplitudes naming method in AmpTools"
     out_string += '''
-    # [Positive/Negative][Re/Im]::Amp_[J][m][L][reflectivity] Vec_ps_refl argus
-    # [Positive/Negative]: "Positive Reflectivity" or "Negative Reflectivity"
-    # [Re/Im]: "Real part" or "Imaginary part"
-    # [J] spin: J 
-    # [m] spin projection: -J, -J+1, ... , J
-    # [L] orbital angular momentum between Phi and Pi0. The value depends on J and parity
-    # [Reflectivity] reflectivity should be consistent with [Positive/Negative]: 1, -1\n'''
+    # [Imag/Real][NegSign/PosSign]::[name] Vec_ps_refl argus
+    # [Imag/Real]: "Imaginary part" or "Real part"
+    # [NegSign/PosSign]: "-" or "+" before Polarization P_gamma
+    # [name]: J_naturality_m_l, e.g. "1pps", "1p0s", "1pms", "1ppd", "1p0d", "1pmd", "1mpp", "1m0p", "1mmp"
+        # J: spin = 0, 1, 2, ...
+        # parity: p(+) or m(-)
+        # m: spin_proj = m2, m, 0, p, p2
+        # l: s, p, d, f, ... "s-wave, p-wave, d-wave ..."
+        # Reflectivity is determined by [NegSign/PosSign] and [naturality]\n'''
     
-
     # Prepare for amplitues
     J_list = [int(amp.split("/")[0]) for amp in args.amplitudes]
     parity_list = [amp.split("/")[1] for amp in args.amplitudes]
@@ -198,7 +195,7 @@ def main(args):
             amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)] = []
             # loop M
             for m_value in range(-spin_J, spin_J+1):
-                # m, orbital angulat momentum, reflectivity, naturality
+                # m, orbital angulat momentum, sign_before_polarization
                 amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, 1))
                 amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, -1))
         else:
@@ -206,7 +203,7 @@ def main(args):
             if i==spin1_D_position:
                 amp_dict_spin1D[str(spin_J)+" "+str(parity)+" "+str(natural)] = []
                 for m_value in range(-spin_J, spin_J+1):
-                    # m, orbital angulat momentum, reflectivity, naturality
+                    # m, orbital angulat momentum, sign_before_polarization
                     amp_dict_spin1D[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, 1))
                     amp_dict_spin1D[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, -1))
 
@@ -215,16 +212,17 @@ def main(args):
                 amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)] = []
                 # loop M
                 for m_value in range(-spin_J, spin_J+1):
-                    # m, orbital angulat momentum, reflectivity, naturality
+                    # m, orbital angulat momentum, sign_before_polarization
                     amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, 1))
                     amp_dict[str(spin_J)+" "+str(parity)+" "+str(natural)].append((m_value, orbital_L, -1))
             
-            
-
+    dict_m_value = {'-2': "m2", '-1': "m", '0': "0", '1': "p", '2': "p2"}
+    dict_l_value = {'0': "s", '1': "p", '2':"d"}
+    dict_parity_value = {'+': "p", '-': "m"}
 
     # Write Amplitudes
     out_string += "\n# Amplitudes\n"
-    for spin_parity, MLRs in amp_dict.items():
+    for spin_parity, MLSs in amp_dict.items():
         # split "spin parity"
         spin_J = int(spin_parity.split()[0])
         parity = spin_parity.split()[1]
@@ -232,29 +230,27 @@ def main(args):
         # Write comment
         out_string += f"# Spin {spin_J} ; Parity {parity} ; Natuality {natural}\n"
 
-        for m_value, l_value, Reflect_value in MLRs:
-            for part, real in zip(["Re", "Im"], [True, False]):
+        parity_sign = dict_parity_value[f'{parity}']
+        for m_value, l_value, Sign_polarization in MLSs:
+            m_sign = dict_m_value[f'{m_value}']
+            l_sign = dict_l_value[f'{l_value}']
+
+            for part, real in zip(["Imag", "Real"], [False, True]):
                 out_string += f"amplitude {reaction}::"
-                if Reflect_value > 0:
-                    out_string += "Positive"
-                else:
-                    out_string += "Negative"
-
-                out_string += f"{part}::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} Vec_ps_refl"
-                out_string += f" {spin_J} {m_value:+} {l_value}"
-
                 if real:
-                    out_string += " +1"
-                    if natural == "1":
-                        out_string += f" {Reflect_value:+}"
-                    else:
-                        out_string += f" {-Reflect_value:+}"
-                else: #imaginary
-                    out_string += " -1"
-                    if natural == "1":
-                        out_string += f" {-Reflect_value:+}"
-                    else:
-                        out_string += f" {Reflect_value:+}"
+                    out_string += f"{part}"
+                    Imag_or_Real = 1
+                else:
+                    out_string += f"{part}"
+                    Imag_or_Real = -1
+
+                if Sign_polarization < 0:
+                    out_string += "NegSign"
+                else:
+                    out_string += "PosSign"
+
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} Vec_ps_refl"
+                out_string += f" {spin_J} {m_value:+} {l_value} {Imag_or_Real:+} {Sign_polarization:+}"
                 
                 out_string += " LOOPPOLANG LOOPPOLVAL"
                 out_string += "\n"
@@ -270,7 +266,7 @@ def main(args):
     # if spin 1 S,D-waves exist at the same time, write spin 1 D amplitudes here
     if SDratio_exist:
         # just copy from above
-        for spin_parity, MLRs in amp_dict_spin1D.items():
+        for spin_parity, MLSs in amp_dict_spin1D.items():
             # split "spin parity"
             spin_J = int(spin_parity.split()[0])
             parity = spin_parity.split()[1]
@@ -278,194 +274,233 @@ def main(args):
             # Write comment
             out_string += f"# Spin {spin_J} ; Parity {parity} ; Natuality {natural}\n"
 
-            for m_value, l_value, Reflect_value in MLRs:
-                for part, real in zip(["Re", "Im"], [True, False]):
+            parity_sign = dict_parity_value[f'{parity}']
+            for m_value, l_value, Sign_polarization in MLSs:
+                m_sign = dict_m_value[f'{m_value}']
+                l_sign = dict_l_value[f'{l_value}']
+
+                for part, real in zip(["Imag", "Real"], [False, True]):
                     out_string += f"amplitude {reaction}::"
-                    if Reflect_value > 0:
-                        out_string += "Positive"
-                    else:
-                        out_string += "Negative"
-
-                    out_string += f"{part}::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} Vec_ps_refl"
-                    out_string += f" {spin_J} {m_value:+} {l_value}"
-
                     if real:
-                        out_string += " +1"
-                        if natural == "1":
-                            out_string += f" {Reflect_value:+}"
-                        else:
-                            out_string += f" {-Reflect_value:+}"
-                    else: #imaginary
-                        out_string += " -1"
-                        if natural == "1":
-                            out_string += f" {-Reflect_value:+}"
-                        else:
-                            out_string += f" {Reflect_value:+}"
+                        out_string += f"{part}"
+                        Imag_or_Real = 1
+                    else:
+                        out_string += f"{part}"
+                        Imag_or_Real = -1
+
+                    if Sign_polarization < 0:
+                        out_string += "NegSign"
+                    else:
+                        out_string += "PosSign"
+
+                    out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} Vec_ps_refl"
+                    out_string += f" {spin_J} {m_value:+} {l_value} {Imag_or_Real:+} {Sign_polarization:+}"
                     
                     out_string += " LOOPPOLANG LOOPPOLVAL"
                     out_string += "\n"
 
-
     # Write Initialization
     out_string += "\n# Initialize Amplitudes\n"
     # Only constrain the first 2 amplitudes to be real
-    need_pos_real = True
-    need_neg_real = True
+    need_real_RealNegSign = True
+    need_real_RealPosSign = True
 
-    for spin_parity, MLRs in amp_dict.items():
+    for spin_parity, MLSs in amp_dict.items():
         # split "spin parity"
         spin_J = int(spin_parity.split()[0])
-        for m_value, l_value, Reflect_value in MLRs:
+        parity = spin_parity.split()[1]
+
+        parity_sign = dict_parity_value[f'{parity}']
+        for m_value, l_value, Sign_polarization in MLSs:
+            m_sign = dict_m_value[f'{m_value}']
+            l_sign = dict_l_value[f'{l_value}']
+            
             out_string += f"initialize {reaction}::"
-            if Reflect_value > 0:
-                out_string += "Positive"
-                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} polar"
-                if need_pos_real:
+
+            if Sign_polarization > 0:
+                out_string += "RealPosSign::"
+                out_string += f"{spin_J}{parity_sign}{m_sign}{l_sign} polar"
+                if need_real_RealPosSign:
                     out_string += " @uniform 0.0 real\n"
-                    need_pos_real = False
+                    need_real_RealPosSign = False
                 else:
                     out_string += " @uniform @polaruniform\n"
             else:
-                out_string += "Negative"
-                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} polar"
-                if need_neg_real:
+                out_string += "RealNegSign::"
+                out_string += f"{spin_J}{parity_sign}{m_sign}{l_sign} polar"
+                if need_real_RealNegSign:
                     out_string += " @uniform 0.0 real\n"
-                    need_neg_real = False
+                    need_real_RealNegSign = False
                 else:
                     out_string += " @uniform @polaruniform\n"
 
     # Write Constraints
     out_string += "\n# Constrain Amplitudes\n"
     # write comments
-    out_string += "# 1. Re <-> Im coefficients are equal for the same reflectivity\n"
+    out_string += "# 1. RealNegSign <-> ImagPosSign, RealPosSign <-> ImagNegSign coefficients are equal\n"
     out_string += "# 2. Polarization constrain\n"
 
-    for spin_parity, MLRs in amp_dict.items():
+    for spin_parity, MLSs in amp_dict.items():
         # split "spin parity"
         spin_J = int(spin_parity.split()[0])
-        for m_value, l_value, Reflect_value in MLRs:
+        parity = spin_parity.split()[1]
+
+        parity_sign = dict_parity_value[f'{parity}']
+        for m_value, l_value, Sign_polarization in MLSs:
+            m_sign = dict_m_value[f'{m_value}']
+            l_sign = dict_l_value[f'{l_value}']
             
             # Re <-> Im constrain
-            out_string += "constrain"
-            out_string += f" {reaction}::"
-            # real part
-            if Reflect_value > 0:
-                out_string += "Positive"
+            out_string += f"constrain {reaction}::"
+            out_string += "Real"
+            if Sign_polarization > 0:
+                out_string += "PosSign"
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} "
+                out_string += f"{reaction}::"
+                out_string += f"ImagNegSign::{spin_J}{parity_sign}{m_sign}{l_sign}\n"
+
             else:
-                out_string += "Negative"
-            out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}"
-            out_string += f" {reaction}::"
-            # imaginary part
-            if Reflect_value > 0:
-                out_string += "Positive"
-            else:
-                out_string += "Negative"
-            out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}\n"
+                out_string += "NegSign"
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} "
+                out_string += f"{reaction}::"
+                out_string += f"ImagPosSign::{spin_J}{parity_sign}{m_sign}{l_sign}\n"
+
 
             # Polarization constrain
             # PARA_0 part
             out_string += "constrain"
-            out_string += f" {reaction}{pol_tags[0]}::"
-            if Reflect_value > 0:
-                out_string += "Positive"
+            out_string += f" {reaction}{pol_tags[0]}::Real"
+            if Sign_polarization > 0:
+                out_string += "PosSign"
             else:
-                out_string += "Negative"
-            out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}"
-            # Looped part
-            out_string += f" {reaction}::"
-            if Reflect_value > 0:
-                out_string += "Positive"
+                out_string += "NegSign"
+            out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign}"
+            # Looped parts
+            out_string += f" {reaction}::Real"
+            if Sign_polarization > 0:
+                out_string += "PosSign"
             else:
-                out_string += "Negative"
-            out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}\n"
-    
+                out_string += "NegSign"
+            out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign}\n"
+
+
     # Constrain S,D-wave coefficients the same; Then scale D-wave by D to S ratio.
     if SDratio_exist:
         out_string += "\n# Constrain S,D-wave coefficients the same; Then scale D-wave by D to S ratio\n"
 
-        for spin_parity, MLRs in amp_dict_spin1D.items():
+        for spin_parity, MLSs in amp_dict_spin1D.items():
             # split "spin parity"
             spin_J = int(spin_parity.split()[0])
-            for m_value, l_value, Reflect_value in MLRs:
-                if Reflect_value > 0:
-                    PosORNeg_string = "Positive"
-                else:
-                    PosORNeg_string = "Negative"
-                
-                # real part
-                out_string += "constrain"
-                out_string += f" {reaction}::" + PosORNeg_string
-                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}"
-                # spin 1 S-wave has only L different from spin 1 D-wave
-                out_string += f" {reaction}::" + PosORNeg_string
-                out_string += f"Re::AMP_{spin_J}{m_value:+}{0:+}{Reflect_value:+}\n"
+            parity = spin_parity.split()[1]
 
-                # imaginary part
-                out_string += "constrain"
-                out_string += f" {reaction}::" + PosORNeg_string
-                out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+}"
+            parity_sign = dict_parity_value[f'{parity}']
+            for m_value, l_value, Sign_polarization in MLSs:
+                m_sign = dict_m_value[f'{m_value}']
+                l_sign = dict_l_value[f'{l_value}']
+
+                if Sign_polarization > 0:
+                    sign_polar_string = "PosSign"
+                else:
+                    sign_polar_string = "NegSign"
+
+                # Real part
+                out_string += f"constrain {reaction}::Real"
+                out_string += sign_polar_string
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign}"
                 # spin 1 S-wave has only L different from spin 1 D-wave
-                out_string += f" {reaction}::" + PosORNeg_string
-                out_string += f"Im::AMP_{spin_J}{m_value:+}{0:+}{Reflect_value:+}\n"
+                out_string += f" {reaction}::Real"
+                out_string += sign_polar_string
+                out_string += f"::{spin_J}{parity_sign}{m_sign}s\n"
+
+                # Imaginary part
+                out_string += f"constrain {reaction}::Imag"
+                out_string += sign_polar_string
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign}"
+                # spin 1 S-wave has only L different from spin 1 D-wave
+                out_string += f" {reaction}::Imag"
+                out_string += sign_polar_string
+                out_string += f"::{spin_J}{parity_sign}{m_sign}s\n"
 
 
     # Write Scales
     out_string += "\n# Scale Amplitudes\n"
-    for spin_parity, MLRs in amp_dict.items():
+    for spin_parity, MLSs in amp_dict.items():
         spin_J = int(spin_parity.split()[0])
-        for m_value, l_value, Reflect_value in MLRs:
-            if Reflect_value > 0:
-                PosORNeg_string = "Positive"
+        parity = spin_parity.split()[1]
+
+        parity_sign = dict_parity_value[f'{parity}']
+        for m_value, l_value, Sign_polarization in MLSs:
+            m_sign = dict_m_value[f'{m_value}']
+            l_sign = dict_l_value[f'{l_value}']
+
+            if Sign_polarization > 0:
+                sign_polar_string = "PosSign"
             else:
-                PosORNeg_string = "Negative"
+                sign_polar_string = "NegSign"
+
             # Real Part
-            out_string += "scale"
-            out_string += f" {reaction}::" + PosORNeg_string
-            out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+            out_string += f"scale {reaction}::Real"
+            out_string += sign_polar_string
+            out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} LOOPSCALE\n"
+
             # Imaginary Part
-            out_string += "scale"
-            out_string += f" {reaction}::" + PosORNeg_string
-            out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+            out_string += f"scale {reaction}::Imag"
+            out_string += sign_polar_string
+            out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} LOOPSCALE\n"
 
     if SDratio_exist:
         out_string += "\n# spin 1 D-wave should be scaled by both polarization and D-to-S ratio\n"
         #Polarization scale
         out_string += "#Polarization scale\n"
-        for spin_parity, MLRs in amp_dict_spin1D.items():
+        for spin_parity, MLSs in amp_dict_spin1D.items():
             # split "spin parity"
             spin_J = int(spin_parity.split()[0])
-            for m_value, l_value, Reflect_value in MLRs:
-                if Reflect_value > 0:
-                    PosORNeg_string = "Positive"
+            parity = spin_parity.split()[1]
+
+            parity_sign = dict_parity_value[f'{parity}']
+            for m_value, l_value, Sign_polarization in MLSs:
+                m_sign = dict_m_value[f'{m_value}']
+                l_sign = dict_l_value[f'{l_value}']
+
+                if Sign_polarization > 0:
+                    sign_polar_string = "PosSign"
                 else:
-                    PosORNeg_string = "Negative"
+                    sign_polar_string = "NegSign"
+
                 # Real Part
-                out_string += "scale"
-                out_string += f" {reaction}::" + PosORNeg_string
-                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+                out_string += f"scale {reaction}::Real"
+                out_string += sign_polar_string
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} LOOPSCALE\n"
                 # Imaginary Part
-                out_string += "scale"
-                out_string += f" {reaction}::" + PosORNeg_string
-                out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} LOOPSCALE\n"
+                out_string += f"scale {reaction}::Imag"
+                out_string += sign_polar_string
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} LOOPSCALE\n"
+        
         #scale D-to-S ratio
         out_string += "#scale D-to-S ratio\n"
-        for spin_parity, MLRs in amp_dict_spin1D.items():
+        for spin_parity, MLSs in amp_dict_spin1D.items():
             # split "spin parity"
             spin_J = int(spin_parity.split()[0])
-            for m_value, l_value, Reflect_value in MLRs:
-                if Reflect_value > 0:
-                    PosORNeg_string = "Positive"
-                else:
-                    PosORNeg_string = "Negative"
-                # Real Part
-                out_string += "scale"
-                out_string += f" {reaction}::" + PosORNeg_string
-                out_string += f"Re::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} [DtoSratio]\n"
-                # Imaginary Part
-                out_string += "scale"
-                out_string += f" {reaction}::" + PosORNeg_string
-                out_string += f"Im::AMP_{spin_J}{m_value:+}{l_value:+}{Reflect_value:+} [DtoSratio]\n"
+            parity = spin_parity.split()[1]
 
+            parity_sign = dict_parity_value[f'{parity}']
+            for m_value, l_value, Sign_polarization in MLSs:
+                m_sign = dict_m_value[f'{m_value}']
+                l_sign = dict_l_value[f'{l_value}']
+
+                if Sign_polarization > 0:
+                    sign_polar_string = "PosSign"
+                else:
+                    sign_polar_string = "NegSign"
+                
+                # Real Part
+                out_string += f"scale {reaction}::Real"
+                out_string += sign_polar_string
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} [dsratio]\n"
+                # Imaginary Part
+                out_string += f"scale {reaction}::Imag"
+                out_string += sign_polar_string
+                out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} [dsratio]\n"
 
     
     # End

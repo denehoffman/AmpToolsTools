@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import json
+import ampwrapper.utils as amputils
+from ampwrapper.fit import FitResults
+import argparse
+import sys
+from pathlib import Path
+import shutil
+import re
+import enlighten
+from tqdm import tqdm
+import pandas as pd
+import subprocess
+from itertools import combinations
+import time
+
+def main():
+    env_path = amputils.get_environment()
+    parser = argparse.ArgumentParser()
+    red_queue = {"cpu": 1990, "threads": 4}
+    green_queue = {"cpu": 1590, "threads": 4}
+    blue_queue = {"cpu": 1990, "threads": 4}
+    queues = {"red": red_queue, "green": green_queue, "blue": blue_queue}
+
+    with open(env_path, 'r') as env_file:
+        env = json.load(env_file)
+    if not env.get('studies'):
+        print(amputils.wrap("You must initialize at least one AmpTools study using amptools-study!"))
+        sys.exit(1)
+    config_keys = list(amputils.get_configs().keys())
+    study_keys = list(env['studies'].keys())
+    parser.add_argument("-s", "--study", choices=study_keys, help="name of AmpTools study to fit")
+    parser.add_argument("-c", "--config", choices=config_keys, help="name of AmpTools config to use in fit")
+    parser.add_argument("-i", "--iterations", type=int, default=1, help="number of fits to do for each bin (randomized bootstrap replication)")
+    parser.add_argument("-stepsize", "--stepsize", help="step size for D/S ratio scan from 0.1 to 0.9")
+    #parser.add_argument("-a", "--append", action="store_true", help="append these iterations to any existing fits rather than rerunning")
+    parser.add_argument("--seed", default=1, help="seed for randomization")
+    parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
+    parser.add_argument("--no-mem", action="store_true", help="don't set a memory cap in the SLURM script (use for large bins where the generated MC is a huge file")
+    args = parser.parse_args()
+    # np.random.seed(int(args.seed)) move this down
+    queue = queues[args.queue]
+    # Validation
+    args.study, args.config = amputils.get_study_config(args.study, args.config)
+
+    print(amputils.DEFAULT(f"Initializing AmpTools fit on study {args.study} using {args.config} as the fit configuration"))
+    study = env['studies'][args.study]
+
+    n_sample = (0.9-0.1)/float(args.stepsize) + 1
+    if(n_sample%1 == 0):
+        n_sample = int(n_sample)
+    else:
+        print("(0.9 - 0.1) is not divisible by the step size!!")
+        exit(2)
+
+    DSratio_list = np.linspace(0.1, 0.9, n_sample)
+    fit_dir_nameList = []
+
+    
+    for DSratio_i in range(n_sample):
+        # contorl decimal places
+        DSratio_list[DSratio_i] = round(DSratio_list[DSratio_i],3)
+        fit_dir_nameList.append(f"{args.config}_{DSratio_list[DSratio_i]}")
+
+        fit_dir = Path(study['directory']) / f"{args.config}_{DSratio_list[DSratio_i]}"
+        fit_dir.mkdir(exist_ok=True)
+    
+        # Make directories
+        for i_bin in range(study['nbins']):
+            bin_path = fit_dir / str(i_bin)
+            bin_path.mkdir(exist_ok=True)
+            iterations = list(range(args.iterations))
+            # if args.append:
+            #     existing_iteration_nums = [int(path.name) for path in bin_path.iterdir()]
+            #     if existing_iteration_nums:
+            #         max_it = max(existing_iteration_nums)
+            #     else:
+            #         max_it = -1
+            #     iterations = list(range(max_it + 1, max_it + 1 + args.iterations))
+            for i_it in iterations:
+                np.random.seed(int(args.seed) + i_it)
+                it_path = bin_path / str(i_it)
+                it_path.mkdir(exist_ok=True)
+                # Copy configuration file
+                config_path = amputils.get_configs()[args.config]
+                config_it_path = it_path / f"{args.config}_{DSratio_list[DSratio_i]}_{i_bin}-{i_it}.cfg"
+                shutil.copy(config_path, config_it_path)
+                # Replace all tags with actual paths and random numbers
+                with open(config_it_path, 'r') as config_file:
+                    config_text = config_file.read()
+
+                    while "@DSratio" in config_text:
+                        config_text = config_text.replace("@DSratio", str(DSratio_list[DSratio_i]))
+                    
+                    while "@uniform" in config_text or "@polaruniform" in config_text:
+                        # the "1" at the end here ensures multiple tags on the same line don't all get the same value
+                        config_text = config_text.replace("@uniform", str(np.random.uniform(0.0, 100.0)), 1)
+                        config_text = config_text.replace("@polaruniform", str(np.random.uniform(0.0, 2 * np.pi)), 1)
+                    p = re.compile("\s@(\w*)_(\w*)")
+                    matches = p.findall(config_text)
+                    for match in matches:
+                        #file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
+                        #just for in_out_check
+                        file_tag = {"000": "PARA_0"}.get(match[1])
+                        if not file_tag:
+                            print(amputils.wrap(f"Error in parsing configuration file tags!\n{match}"))
+                            sys.exit(1)
+                        file_paths = [file_path for file_path in (Path(study['directory']) / match[0]).iterdir() if file_tag in str(file_path.name) and file_path.stem.endswith(f"_{i_bin}")]
+                        if not file_paths:
+                            print(amputils.wrap(f"Error locating the {match[0]} file with polarization {file_tag} for bin {i_bin}!"))
+                            sys.exit(1)
+                        if len(file_paths) > 1:
+                            print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
+                        config_text = config_text.replace(f"@{match[0]}_{match[1]}", str(file_paths[0]))
+                    p = re.compile("\s@(\w*)")
+                    matches = p.findall(config_text)
+                    for match in [match for match in matches if str(match) != "tags"]:
+                        file_paths = [file_path for file_path in (Path(study['directory']) / str(match)).iterdir() if file_path.stem.endswith(f"_{i_bin}")]
+                        if not file_paths:
+                            print(amputils.wrap(f"Error locating the {match[0]} file for bin {i_bin}!"))
+                            sys.exit(1)
+                        if len(file_paths) > 1:
+                            print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
+                        config_text = config_text.replace(f"@{str(match)}", str(file_paths[0]))
+                with open(config_it_path, 'w') as config_file:
+                    config_file.write(config_text)
+        # Dispatch jobs
+        slurm_path = Path(study['directory']) / f"dispatch_{args.config}_{DSratio_list[DSratio_i]}.csh"
+        with open(slurm_path, 'w') as slurm_file:
+            lines = ["#!/bin/tcsh -f\n"]
+            lines.append(f"#SBATCH --ntasks={queue['threads']}\n")
+            lines.append(f"#SBATCH --partition={args.queue}\n")
+            if not args.no_mem:
+                lines.append(f"#SBATCH --mem={queue['threads'] * queue['cpu']}\n")
+            lines.append("#SBATCH --time=4:00:00\n")
+            lines.append(f"#SBATCH --output={study['directory']}/{args.config}_{DSratio_list[DSratio_i]}/log_{args.config}_%A.log\n")
+            lines.append("#SBATCH --quiet\n")
+            lines.append(f"#SBATCH --array={iterations[0]}-{iterations[-1]}\n")
+            lines.append("pwd; hostname; date; whoami\n")
+            lines.append("echo $SLURM_ARRAY_TASK_ID\n")
+            lines.append(f"cd {study['directory']}/{args.config}_{DSratio_list[DSratio_i]}/$1/$SLURM_ARRAY_TASK_ID\n")
+            lines.append(f"fit -c {args.config}_{DSratio_list[DSratio_i]}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
+            lines.append("echo DONE!; date")
+            slurm_file.writelines(lines)
+
+
+        # Run fits
+        job_names = []
+        for i_bin in tqdm(range(study['nbins'])):
+            subprocess.run(["sbatch", "-J", f"{args.config}_{DSratio_list[DSratio_i]}_{str(i_bin)}", str(slurm_path), str(i_bin)])
+            job_names.append(f"{args.config}_{DSratio_list[DSratio_i]}_{i_bin}")
+        # Wait for all jobs to finish running
+        running = True
+        while running:
+            n_jobs_running, n_jobs_in_queue = amputils.check_SLURM(job_names)
+            print(f"{n_jobs_in_queue:4} job(s) in queue | {n_jobs_running:4} job(s) running", end="\r")
+            if n_jobs_in_queue == 0:
+                running = False
+            time.sleep(2) # don't check it so often
+        print() 
+
+
+        # Collect results
+        res_path = Path(study['directory']) / f"{args.config}_{DSratio_list[DSratio_i]}_results.csv"
+        res_path_best = Path(study['directory']) / f"{args.config}_{DSratio_list[DSratio_i]}_results_best.csv"
+        df = pd.DataFrame()
+        for i_bin in tqdm(range(study['nbins'])):
+            bin_path = fit_dir / str(i_bin)
+            for it in [int(path.name) for path in bin_path.iterdir()]:
+                fit_path = Path(study['directory']) / f"{args.config}_{DSratio_list[DSratio_i]}/{i_bin}/{it}/{amputils.get_config_reaction(args.config)}.fit"
+                if not fit_path.exists():
+                    print(f"No fit file found for bin {i_bin} iteration {it}")
+                    continue
+                wrapper = FitResults.FitResultsWrapper(str(fit_path))
+                amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
+                par_list = [s.decode() for s in wrapper.parNameList()]
+                polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
+                res_dict = {"bin": i_bin, "iteration": it}
+                
+                # get intensity for each amplitude
+                for amp in amp_list:
+                    # amp is "PositiveRe::AMP_J+M+L+Reflect"
+                    if 'Re' in amp:
+                        # wave is "AMP_J+M+L+Reflect"
+                        wave = amp.split("::")[-1]
+                        if polarizations:
+                            wave_set = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp}" for pol in polarizations]
+                            wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
+                            wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp}"
+                        else:
+                            wave_set = [f"{amputils.get_config_reaction(args.config)}::{amp}"]
+                            wave_set.extend([f"{amputils.get_config_reaction(args.config)}::{amp.replace('Re', 'Im')}"])
+                            wave_pol0 = f"{amputils.get_config_reaction(args.config)}::{amp}"
+                        res_dict[f"{wave}@int"], res_dict[f"{wave}@int@err"] = wrapper.intensity(wave_set, False)
+                        res_dict[f"{wave}@int@acc"], res_dict[f"{wave}@int@acc@err"] = wrapper.intensity(wave_set, True)
+                        res_dict[f"{wave}@amp"] = wrapper.productionParameter(wave_pol0)
+                        res_dict[f"{wave}@amp_scaled"] = wrapper.scaledProductionParameter(wave_pol0)
+                
+                # combine some amplitudes together
+                wave_list = [amp.split("::")[1].replace("AMP_", "") for amp in amp_list]
+                    # wave format "J+M+L+Refelct"
+                JL_pair_list = np.unique([[int(wave[0]), int(wave[4])] for wave in wave_list], axis=0)
+                
+                for JL_pair in JL_pair_list:
+                    J_value = JL_pair[0]
+                    L_value = JL_pair[1]
+                    wave_set = []
+                    for amp in amp_list:
+                        if 'Re' in amp:
+                            # sum spin_projection M and Reflectivity
+                            if int(amp.split("::")[1].replace("AMP_", "")[0]) == J_value and int(amp.split("::")[1].replace("AMP_", "")[4]) == L_value:
+                                wave = amp.split("::")[-1]
+                                wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp}" for pol in polarizations])
+                                wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
+                    
+                    res_dict[f"J{J_value}L{L_value}@totint"], res_dict[f"J{J_value}L{L_value}@totint@err"] = wrapper.intensity(wave_set, False)
+                    res_dict[f"J{J_value}L{L_value}@totint@acc"], res_dict[f"J{J_value}L{L_value}@totint@acc@err"] = wrapper.intensity(wave_set, True)
+                res_dict["total@int"], res_dict["total@int@err"] = wrapper.total_intensity(False)
+                res_dict["total@int@acc"], res_dict["total@int@acc@err"] = wrapper.total_intensity(True)
+                for par in par_list:
+                    res_dict[par + "@par"] = wrapper.parValue(par)
+                    res_dict[par + "@par@err"] = wrapper.parError(par)
+                res_dict["likelihood"] = wrapper.likelihood()
+
+        
+                """
+                amp_pairs = combinations(amp_list, 2)
+                for amp1, amp2 in amp_pairs:
+                    wave1 = amp1.split("::")[-1]
+                    wave2 = amp2.split("::")[-1]
+                    res_dict[f"{wave1}::{wave2}@phase"], res_dict[f"{wave1}::{wave2}@phase@err"] = wrapper.phaseDiff(amp1, amp2)
+                """
+                df = pd.concat([pd.DataFrame(res_dict, index=[0]), df], ignore_index=True)
+        df.to_csv(res_path, index=False)
+
+        # save the best result to another file
+        bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
+        best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
+        best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
+        best_df.to_csv(res_path_best, index=False)
+
+        if not study.get('results'):
+            study['results'] = []
+        if not args.config in study['results']:
+            study['results'].append(args.config)
+        with open(env_path, 'w') as env_file:
+            json.dump(env, env_file, indent=4)
+
+
+if __name__ == "__main__":
+    main()

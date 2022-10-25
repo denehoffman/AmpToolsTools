@@ -43,6 +43,7 @@ setup(
              SRC + "/amptools-view-thrown-topologies",
              SRC + "/amptools-PhiPi-cfg",
              SRC + "/amptools-PhiPi-fit",
+             SRC + "/amptools-PhiPi-fit-DSscan",
              SRC + "/amptools-PhiPi-result",
              SRC + "/amptools-PhiPi-plot"],
     install_requires=[

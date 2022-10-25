@@ -19,9 +19,9 @@ import time
 def main():
     env_path = amputils.get_environment()
     parser = argparse.ArgumentParser()
-    red_queue = {"cpu": 1990, "threads": 4}
-    green_queue = {"cpu": 1590, "threads": 4}
-    blue_queue = {"cpu": 1990, "threads": 4}
+    red_queue = {"cpu": 1990, "threads": 16}
+    green_queue = {"cpu": 1590, "threads": 16}
+    blue_queue = {"cpu": 1990, "threads": 16}
     queues = {"red": red_queue, "green": green_queue, "blue": blue_queue}
 
     with open(env_path, 'r') as env_file:
@@ -79,6 +79,8 @@ def main():
                 matches = p.findall(config_text)
                 for match in matches:
                     file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
+                    # for in_out_check, use the line below and comment the line above
+                    #file_tag = {"000": "PARA_0"}.get(match[1])
                     if not file_tag:
                         print(amputils.wrap(f"Error in parsing configuration file tags!\n{match}"))
                         sys.exit(1)
