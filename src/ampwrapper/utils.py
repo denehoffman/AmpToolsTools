@@ -714,7 +714,7 @@ def get_config_reaction(name: str) -> str:
     config_path = get_configs()[name]
     with open(config_path, 'r') as config_file:
         content = config_file.read()
-    regex = re.compile("reaction (.+?)\s")
+    regex = re.compile("\\nreaction (.+?)\s")
     return regex.search(content).group(1)
 
 def get_config_background(name: str) -> bool:
