@@ -7,14 +7,10 @@ from ampwrapper.fit import FitResults
 import argparse
 import sys
 from pathlib import Path
-import shutil
-import re
-import enlighten
 from tqdm import tqdm
 import pandas as pd
-import subprocess
 from itertools import combinations
-import time
+
 
 
 def main(args, env):
@@ -31,7 +27,9 @@ def main(args, env):
     dict_m_value = {'-2': "m2", '-1': "m", '0': "0", '1': "p", '2': "p2"}
 
     df = pd.DataFrame()
+    polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config, args.phase1)]
     for i_bin in tqdm(range(study['nbins'])):
+        print(f'Start to collect results from the {i_bin} bin.')
         bin_path = fit_dir / str(i_bin)
         for it in [int(path.name) for path in bin_path.iterdir()]:
             fit_path = Path(study['directory']) / f"{args.config}/{i_bin}/{it}/{amputils.get_config_reaction(args.config)}.fit"
@@ -41,7 +39,6 @@ def main(args, env):
             wrapper = FitResults.FitResultsWrapper(str(fit_path))
             amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
             par_list = [s.decode() for s in wrapper.parNameList()]
-            polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
             res_dict = {"bin": i_bin, "iteration": it}
             
             # get intensity for each amplitude
@@ -88,12 +85,12 @@ def main(args, env):
                     res_dict[f"{pos_refl_waveName}@int"], res_dict[f"{pos_refl_waveName}@int@err"] = wrapper.intensity(pos_refl_waveSet, False)
                     res_dict[f"{pos_refl_waveName}@int@acc"], res_dict[f"{pos_refl_waveName}@int@acc@err"] = wrapper.intensity(pos_refl_waveSet, True)
                     res_dict[f"{pos_refl_waveName}@amp"] = wrapper.productionParameter(pos_refl_wave_pol0)
-                    res_dict[f"{pos_refl_waveName}@amp_scaled"] = wrapper.scaledProductionParameter(pos_refl_wave_pol0)
+                    #res_dict[f"{pos_refl_waveName}@amp_scaled"] = wrapper.scaledProductionParameter(pos_refl_wave_pol0)
 
                     res_dict[f"{neg_refl_waveName}@int"], res_dict[f"{neg_refl_waveName}@int@err"] = wrapper.intensity(neg_refl_waveSet, False)
                     res_dict[f"{neg_refl_waveName}@int@acc"], res_dict[f"{neg_refl_waveName}@int@acc@err"] = wrapper.intensity(neg_refl_waveSet, True)
                     res_dict[f"{neg_refl_waveName}@amp"] = wrapper.productionParameter(neg_refl_wave_pol0)
-                    res_dict[f"{neg_refl_waveName}@amp_scaled"] = wrapper.scaledProductionParameter(neg_refl_wave_pol0)
+                    #res_dict[f"{neg_refl_waveName}@amp_scaled"] = wrapper.scaledProductionParameter(neg_refl_wave_pol0)
 
 
             
@@ -139,6 +136,10 @@ def main(args, env):
     bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
     best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
+    if best_df is None:
+        print(wrap("No best fit found for any bins, make sure results have been collected!"))
+        sys.exit(1)
+
     best_df.to_csv(res_path_best, index=False)
 
     if not study.get('results'):
@@ -167,6 +168,7 @@ if __name__ == "__main__":
 
     parser.add_argument("-s", "--study", choices=study_keys, help="name of AmpTools study to fit")
     parser.add_argument("-c", "--config", choices=config_keys, help="name of AmpTools config to use in fit")
+    parser.add_argument("--phase1", action="store_true", help="use all phase1 data")
     
     args = parser.parse_args()
 

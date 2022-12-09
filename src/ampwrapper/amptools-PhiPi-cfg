@@ -15,19 +15,50 @@ def main(args):
 
     reaction = args.name
     particles = ["gamma", "proton", "ps", "vec_d1", "vec_d2"]
-   
-    polarizations = ["AMO", "PARA_0", "PERP_45", "PERP_90", "PARA_135"]
-    pol_tags = ["_AMO", "_000", "_045", "_090", "_135"]
-    pol_angles = ["0.0", "0.0", "45.0", "90.0", "135.0"]
-    pol_values = ["0.00001", "0.3519", "0.3374", "0.3303", "0.3375"]
-    if not args.amo:
-        polarizations = polarizations[1:]
-        pol_tags = pol_tags[1:]
-        pol_angles = pol_angles[1:]
-        pol_values = pol_values[1:]
+
     file_types = ["DATA", "GEN", "ACC"]
+
+    if not args.phase1:
+        pol_tags = ["_AMO", "_000", "_045", "_090", "_135"]
+        pol_values = ["0.00001", "0.3519", "0.3374", "0.3303", "0.3375"]
+        pol_angles = ["0.0", "0.0", "45.0", "90.0", "135.0"]
+
+        if not args.amo:
+            pol_tags = pol_tags[1:]
+            pol_angles = pol_angles[1:]
+            pol_values = pol_values[1:]
+
+    else:
+        pol_tags_AngelOnly = ["_AMO", "_000", "_045", "_090", "_135"]
+        pol_tags = ["_AMO_S17", "_AMO_S18", "_AMO_F18", 
+                    "_000_S17", "_045_S17", "_090_S17", "_135_S17",
+                    "_000_S18", "_045_S18", "_090_S18", "_135_S18",
+                    "_000_F18", "_045_F18", "_090_F18", "_135_F18"]
+        # AMO_S17, AMO_S18, AMO_F18,
+        # S17: 000, 045, 090, 135
+        # S18: ...
+        # F18: ...
+        pol_values = ["0.00001", "0.00001","0.00001",
+                      "0.3537", "0.3484", "0.3472", "0.3512",
+                      "0.3420", "0.3474", "0.3478", "0.3517",
+                      "0.3563", "0.3403", "0.3430", "0.3523"]
+        pol_angles = ["0.0", "0.0", "0.0",
+                      "0.0", "45.0", "90.0", "135.0",
+                      "0.0", "45.0", "90.0", "135.0",
+                      "0.0", "45.0", "90.0", "135.0"]
+
+        if not args.amo:
+            pol_tags_AngelOnly = pol_tags_AngelOnly[1:]
+            pol_tags = pol_tags[3:]
+            pol_angles = pol_angles[3:]
+            pol_values = pol_values[3:]
+    
+
     if args.background:
         file_types.append("BKG")
+        if args.phase1:
+            print("bkg option is not valid for all Phase1 data")
+            exit(1)
 
     # Write Header 
     HDOUBLE.width = 60
@@ -37,8 +68,8 @@ def main(args):
                      "like file paths, seeds, and initializations.") 
     
     out_string = "\n".join(["# " + line for line in header.split("\n")])
-    out_string += "\n# Code for generating this file:\n# amptools-cfg-PhiPi "
-    out_string = "\n# Code for generating this file:\n# amptools-cfg-PhiPi "
+    out_string += "\n# Code for generating this file:\n# amptools-PhiPi-cfg "
+    out_string = "\n# Code for generating this file:\n# amptools-PhiPi-cfg "
     
     #whether spin1 has S,D-wave at the same time
     JL_pair = [[int(amp.split("/")[0]), int(amp.split("/")[2])] for amp in args.amplitudes]
@@ -64,9 +95,14 @@ def main(args):
     
     # Write Parameters
     out_string += "\n# Parameters\n"
-    out_string += f"parameter polScale{pol_tags[0]} 1.0 fixed\n"
-    for pol in pol_tags[1:]:
-        out_string += f"parameter polScale{pol} 1.0\n"
+    if args.phase1:
+        out_string += f"parameter polScale{pol_tags_AngelOnly[0]} 1.0 fixed\n"
+        for pol in pol_tags_AngelOnly[1:]:
+            out_string += f"parameter polScale{pol} 1.0\n"
+    else:
+        out_string += f"parameter polScale{pol_tags[0]} 1.0 fixed\n"
+        for pol in pol_tags[1:]:
+            out_string += f"parameter polScale{pol} 1.0\n"
 
     if SDratio_exist:
         out_string += "parameter dsratio 1.0\n"
@@ -77,18 +113,32 @@ def main(args):
     reaction_loop = f"loop {reaction}"
     scale_loop = "loop LOOPSCALE"
     ni_loop = "loop LOOPNIFILE"
+
+    if args.phase1:
+        # S17, S18 ,F18 repeat 3 times
+        for i in range(3):
+            for pol in pol_tags_AngelOnly:
+                scale_loop += f" [polScale{pol}]"
+
     for pol in pol_tags:
         reaction_loop += f" {reaction}{pol}"
-        scale_loop += f" [polScale{pol}]"
         ni_loop += f" normint{pol}"
+        if not args.phase1:
+            scale_loop += f" [polScale{pol}]"
+        
     out_string += f"{reaction_loop}\n"
+    if args.phase1: out_string += "\n"
     out_string += f"{scale_loop}\n"
+    if args.phase1: out_string += "\n"
     out_string += f"{ni_loop}\n"
+    if args.phase1: out_string += "\n"
+
     for file_type in file_types:
         file_loop = f"loop LOOP{file_type}FILE"
         for pol in pol_tags:
             file_loop += f" @{file_type}{pol}"
         out_string += f"{file_loop}\n"
+        if args.phase1: out_string += "\n"
 
     polang_loop = "loop LOOPPOLANG"
     polval_loop = "loop LOOPPOLVAL"
@@ -536,6 +586,7 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output', help="name for output configuration file")
     parser.add_argument('--amo', action="store_true", help="include amorphous runs")
     parser.add_argument('-n', '--name', help="reaction name", default="default")
+    parser.add_argument('--phase1', action="store_true", help="use all phase1 data")
     # parser.add_argument('--pol-files', action="store_true", help="use separate files for each polarization")
     # parser.add_argument('--add-pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
     

@@ -699,16 +699,22 @@ def get_configs() -> dict:
     config_path = env_parent / "configs"
     return {f.stem: f for f in config_path.iterdir() if f.suffix == ".cfg"}
 
-def get_config_pols(name: str):
+def get_config_pols(name: str, multi_datasets = False):
     config_path = get_configs()[name]
     with open(config_path, 'r') as config_file:
         content = config_file.read()
-    regex = re.compile("loop LOOPDATAFILE (?:@DATA_(\S{3})\s)(?:@DATA_(\S{3})\s)?(?:@DATA_(\S{3})\s)?(?:@DATA_(\S{3})?\s)?(?:@DATA_(\S{3})\s)?")
-    m = regex.search(content)
-    if m:
-        return [g for g in m.groups() if g is not None]
-    else:
-        return []
+    if not multi_datasets:
+        regex = re.compile("loop LOOPDATAFILE (?:@DATA_(\S{3})\s)(?:@DATA_(\S{3})\s)?(?:@DATA_(\S{3})\s)?(?:@DATA_(\S{3})?\s)?(?:@DATA_(\S{3})\s)?")
+        m = regex.search(content)
+        if m:
+            return [g for g in m.groups() if g is not None]
+        else:
+            return []
+    else: # use multi-datasets e.g. using GlueX Phase 1 data
+        regex = re.compile("@DATA_(\S{3}_\S{3})\s")
+        m = regex.findall(content)
+        return m
+
 
 def get_config_reaction(name: str) -> str:
     config_path = get_configs()[name]

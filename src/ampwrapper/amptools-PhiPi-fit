@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 import shutil
 import re
-import enlighten
 from tqdm import tqdm
 import pandas as pd
 import subprocess
@@ -38,6 +37,7 @@ def main():
     parser.add_argument("--seed", default=1, help="seed for randomization")
     parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
     parser.add_argument("--no-mem", action="store_true", help="don't set a memory cap in the SLURM script (use for large bins where the generated MC is a huge file")
+    parser.add_argument("--phase1", action="store_true", help="Use all GlueX Phase1 data")
     args = parser.parse_args()
     # np.random.seed(int(args.seed)) move this down
     queue = queues[args.queue]
@@ -75,12 +75,17 @@ def main():
                     # the "1" at the end here ensures multiple tags on the same line don't all get the same value
                     config_text = config_text.replace("@uniform", str(np.random.uniform(0.0, 100.0)), 1)
                     config_text = config_text.replace("@polaruniform", str(np.random.uniform(0.0, 2 * np.pi)), 1)
-                p = re.compile("\s@(\w*)_(\w*)")
+                p = re.compile("\s@(\w*)_(\w*_\w*)")
                 matches = p.findall(config_text)
                 for match in matches:
-                    file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
-                    # for in_out_check, use the line below and comment the line above
-                    #file_tag = {"000": "PARA_0"}.get(match[1])
+                    if not args.phase1:
+                        file_tag = {"AMO": "AMO", "000": "PARA_0", "045": "PERP_45", "090": "PERP_90", "135": "PARA_135"}.get(match[1])
+                        # for in_out_check, use the line below and comment the line above
+                        #file_tag = {"000": "PARA_0"}.get(match[1])
+                    else:
+                        file_tag = {"AMO_S17": "AMO_S17", "000_S17": "PARA_0_S17", "045_S17": "PERP_45_S17", "090_S17": "PERP_90_S17", "135_S17": "PARA_135_S17",
+                                    "AMO_S18": "AMO_S18", "000_S18": "PARA_0_S18", "045_S18": "PERP_45_S18", "090_S18": "PERP_90_S18", "135_S18": "PARA_135_S18",
+                                    "AMO_F18": "AMO_F18", "000_F18": "PARA_0_F18", "045_F18": "PERP_45_F18", "090_F18": "PERP_90_F18", "135_F18": "PARA_135_F18"}.get(match[1])
                     if not file_tag:
                         print(amputils.wrap(f"Error in parsing configuration file tags!\n{match}"))
                         sys.exit(1)
@@ -90,17 +95,19 @@ def main():
                         sys.exit(1)
                     if len(file_paths) > 1:
                         print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
+                        sys.exit(2)
                     config_text = config_text.replace(f"@{match[0]}_{match[1]}", str(file_paths[0]))
-                p = re.compile("\s@(\w*)")
-                matches = p.findall(config_text)
-                for match in [match for match in matches if str(match) != "tags"]:
-                    file_paths = [file_path for file_path in (Path(study['directory']) / str(match)).iterdir() if file_path.stem.endswith(f"_{i_bin}")]
-                    if not file_paths:
-                        print(amputils.wrap(f"Error locating the {match[0]} file for bin {i_bin}!"))
-                        sys.exit(1)
-                    if len(file_paths) > 1:
-                        print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
-                    config_text = config_text.replace(f"@{str(match)}", str(file_paths[0]))
+                #### PhiPi scripts do NOT support @tags yet
+                # p = re.compile("\s@(\w*)")
+                # matches = p.findall(config_text)
+                # for match in [match for match in matches if str(match) != "tags"]:
+                #     file_paths = [file_path for file_path in (Path(study['directory']) / str(match)).iterdir() if file_path.stem.endswith(f"_{i_bin}")]
+                #     if not file_paths:
+                #         print(amputils.wrap(f"Error locating the {match[0]} file for bin {i_bin}!"))
+                #         sys.exit(1)
+                #     if len(file_paths) > 1:
+                #         print(amputils.wrap(f"Warning: More than one file matches {file_tag} for {match[0]} in bin {i_bin}!"))
+                #     config_text = config_text.replace(f"@{str(match)}", str(file_paths[0]))
             with open(config_it_path, 'w') as config_file:
                 config_file.write(config_text)
     # Dispatch jobs
