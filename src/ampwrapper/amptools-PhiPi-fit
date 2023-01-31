@@ -18,9 +18,9 @@ import time
 def main():
     env_path = amputils.get_environment()
     parser = argparse.ArgumentParser()
-    red_queue = {"cpu": 1990, "threads": 16}
-    green_queue = {"cpu": 1590, "threads": 16}
-    blue_queue = {"cpu": 1990, "threads": 16}
+    red_queue = {"cpu": 1990, "threads": 4}
+    green_queue = {"cpu": 1590, "threads": 4}
+    blue_queue = {"cpu": 1990, "threads": 4}
     queues = {"red": red_queue, "green": green_queue, "blue": blue_queue}
 
     with open(env_path, 'r') as env_file:
@@ -38,6 +38,7 @@ def main():
     parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
     parser.add_argument("--no-mem", action="store_true", help="don't set a memory cap in the SLURM script (use for large bins where the generated MC is a huge file")
     parser.add_argument("--phase1", action="store_true", help="Use all GlueX Phase1 data")
+    parser.add_argument("-m", "--maxFitIter", help="Max number of MINUIT iterations for each fit. Default is 10000")
     args = parser.parse_args()
     # np.random.seed(int(args.seed)) move this down
     queue = queues[args.queue]
@@ -71,11 +72,17 @@ def main():
             # Replace all tags with actual paths and random numbers
             with open(config_it_path, 'r') as config_file:
                 config_text = config_file.read()
+                # random numbers for initial points
                 while "@uniform" in config_text or "@polaruniform" in config_text:
                     # the "1" at the end here ensures multiple tags on the same line don't all get the same value
                     config_text = config_text.replace("@uniform", str(np.random.uniform(0.0, 100.0)), 1)
                     config_text = config_text.replace("@polaruniform", str(np.random.uniform(0.0, 2 * np.pi)), 1)
-                p = re.compile("\s@(\w*)_(\w*_\w*)")
+                # fill file path 
+                if not args.phase1:
+                    p = re.compile("\s@(\w*)_(\w*)")
+                else:
+                    p = re.compile("\s@(\w*)_(\w*_\w*)")
+
                 matches = p.findall(config_text)
                 for match in matches:
                     if not args.phase1:
@@ -125,7 +132,10 @@ def main():
         lines.append("pwd; hostname; date; whoami\n")
         lines.append("echo $SLURM_ARRAY_TASK_ID\n")
         lines.append(f"cd {study['directory']}/{args.config}/$1/$SLURM_ARRAY_TASK_ID\n")
-        lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
+        if not args.maxFitIter:
+            lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
+        else:
+            lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg -m {args.maxFitIter}\n")
         lines.append("echo DONE!; date")
         slurm_file.writelines(lines)
 

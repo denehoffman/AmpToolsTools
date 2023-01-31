@@ -72,13 +72,14 @@ def main(args):
     amp_list = [amp for amp in amp_list if amp[0]!='t'] # drop the 'total@int'
     amp_list_to_plot = [amp for amp in amp_list if amp[0]=='p'] # only extract positive reflectivity amp
     with PdfPages(out_file) as pdf:
-        for amp in amp_list_to_plot: #p1pms
+        for amp in amp_list_to_plot: #p1pms or p2pm2d
             J_value = int(amp[1])
-            if J_value > 1:
-                print('the code to extract M(spin projection) is designed only for -1, 0, 1')
-                exit(1)
-            M_value = int(dict_m_letter[amp[3]])
-            L_value = int(dict_l_letter[amp[4]])
+            if amp[4].isdigit(): # p2pm2d J>2
+                M_value = int(dict_m_letter[amp[3:5]])
+                L_value = int(dict_l_letter[amp[5]])
+            else: # p1pms
+                M_value = int(dict_m_letter[amp[3]])
+                L_value = int(dict_l_letter[amp[4]])
             
             neg_amp = list(amp)
             neg_amp[0]='m'

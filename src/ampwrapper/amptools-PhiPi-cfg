@@ -578,7 +578,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    description = DEFAULT("""This script generates an AmpTools configuration file for Phi-Pi system. Supply vector-pseudoscalar amplitudes in the format J/parity/L (separated by backslashes) where "J", "parity", and "L" are the particle X spin(0,1,2), parity(+,-), and orbital anglular momentum between 2 decay daughters. Optionally, one may add a tag onto a particular amplitude or set of amplitudes with J/P/L@TAG. The tag can also be formatted as @ampname@Amplitude@argument@argument... to include a named amplitude (for mass-dependent fits). For instance, 2/1/1@f21270@BreitWigner@1.2755@0.1867@2@2@3 would generate a Breit-Wigner with a 1275.5 MeV mass and 186.7 MeV width (the last three arguments are spin and the index of the daughter particles).""", replace_whitespace=False)
+    description = DEFAULT("""This script generates an AmpTools configuration file for Phi-Pi system. Supply vector-pseudoscalar amplitudes in the format J/parity/L (separated by backslashes) where "J", "parity", and "L" are the particle X spin(0,1,2), parity(+,-), and orbital anglular momentum between 2 decay daughters.(1/+/0 1/+/2)""", replace_whitespace=False)
     parser = argparse.ArgumentParser(description=description,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('amplitudes', nargs="+", help="list of amplitudes to include, formatted as J/Parity/L")

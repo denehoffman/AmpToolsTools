@@ -46,24 +46,26 @@ def main(args, env):
                 # amp: " RealPosSign::'wave' "
                 # wave is "1pps", "1p0s", "1pms", "1ppd", "1p0d", "1pmd", "1mpp", "1m0p", "1mmp"
                 wave = amp.split("::")[-1]
-                spin_J_value = int(wave[0])
-                parity_sign = wave[1]
-                if spin_J_value==1 and parity_sign=='p':
-                    naturality = False
-                elif spin_J_value==1 and parity_sign=='m':
-                    naturality =True
-                else:
-                    print('Warning: The particle J^P is not defined here!!!!!')
-                    exit(1)
+                # spin_J_value = int(wave[0])
+                # parity_sign = wave[1]
+                # if spin_J_value==1 and parity_sign=='p':
+                #     naturality = False
+                # elif spin_J_value==1 and parity_sign=='m':
+                #     naturality =True
+                # else:
+                #     print('Warning: The particle J^P is not defined here!!!!!')
+                #     exit(1)
                 if 'RealPosSign' in amp:
                     pos_refl_waveName = 'p' + wave
                     neg_refl_waveName = 'm' + wave
-                    if naturality: #natural
-                        pos_refl_amps = ['RealPosSign','ImagNegSign']
-                        neg_refl_amps = ['RealNegSign','ImagPosSign']
-                    else: # unnatural
-                        pos_refl_amps = ['RealNegSign','ImagPosSign']
-                        neg_refl_amps = ['RealPosSign','ImagNegSign']
+                    pos_refl_amps = ['RealNegSign','ImagPosSign']
+                    neg_refl_amps = ['RealPosSign','ImagNegSign']
+                    # if naturality: #natural
+                    #     pos_refl_amps = ['RealPosSign','ImagNegSign']
+                    #     neg_refl_amps = ['RealNegSign','ImagPosSign']
+                    # else: # unnatural
+                    #     pos_refl_amps = ['RealNegSign','ImagPosSign']
+                    #     neg_refl_amps = ['RealPosSign','ImagNegSign']
 
                     if polarizations:
                         pos_refl_waveSet = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', pos_refl_amps[0])}" for pol in polarizations]
