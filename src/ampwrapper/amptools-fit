@@ -157,6 +157,7 @@ def main():
             wrapper = FitResults.FitResultsWrapper(str(fit_path))
             amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
             par_list = [s.decode() for s in wrapper.parNameList()]
+            amp_list = sorted(set(amp_list), key = amp_list.index) # remove duplicates caused by different polarization
             polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config)]
             res_dict = {"bin": i_bin, "iteration": it}
             for amp in amp_list:
