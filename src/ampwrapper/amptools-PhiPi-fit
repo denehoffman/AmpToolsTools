@@ -37,7 +37,8 @@ def main():
     parser.add_argument("--seed", default=1, help="seed for randomization")
     parser.add_argument("-q", "--queue", choices=["red", "green", "blue"], default="blue", help="SLURM queue for jobs")
     parser.add_argument("--no-mem", action="store_true", help="don't set a memory cap in the SLURM script (use for large bins where the generated MC is a huge file")
-    parser.add_argument("--phase1", action="store_true", help="Use all GlueX Phase1 data")
+    parser.add_argument("--MPI", action="store_true", help="utilize openMPI to perform fits (make sure environment set up correctly)")
+    parser.add_argument("--phase1", action="store_true", help="When the pol info is NOT included in the beam 4-vector, and use all GlueX Phase1 data")
     parser.add_argument("-m", "--maxFitIter", help="Max number of MINUIT iterations for each fit. Default is 10000")
     args = parser.parse_args()
     # np.random.seed(int(args.seed)) move this down
@@ -132,10 +133,13 @@ def main():
         lines.append("pwd; hostname; date; whoami\n")
         lines.append("echo $SLURM_ARRAY_TASK_ID\n")
         lines.append(f"cd {study['directory']}/{args.config}/$1/$SLURM_ARRAY_TASK_ID\n")
-        if not args.maxFitIter:
-            lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
+        if args.MPI:
+            lines.append(f"mpirun --mca btl_openib_allow_ib 1 fitMPI -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg -m 75000\n")
         else:
-            lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg -m {args.maxFitIter}\n")
+            if not args.maxFitIter:
+                lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg\n")
+            else:
+                lines.append(f"fit -c {args.config}_${{1}}-${{SLURM_ARRAY_TASK_ID}}.cfg -m {args.maxFitIter}\n")
         lines.append("echo DONE!; date")
         slurm_file.writelines(lines)
 
@@ -154,6 +158,8 @@ def main():
             running = False
         time.sleep(2) # don't check it so often
     print() 
+
+    subprocess.run(["amptools-PhiPi-result", "-s", f"{args.study}", "-c", f"{args.config}"])
 
 
 if __name__ == "__main__":
