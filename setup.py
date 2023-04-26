@@ -31,6 +31,7 @@ setup(
              SRC + "/amptools-fit-stability",
              SRC + "/amptools-generate",
              SRC + "/amptools-generate-from-json",
+             SRC + "/amptools-info",
              SRC + "/amptools-link",
              SRC + "/amptools-plot",
              SRC + "/amptools-plot-angles",
