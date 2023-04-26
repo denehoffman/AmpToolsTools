@@ -9,6 +9,7 @@ import sys
 import pandas as pd
 from pathlib import Path
 import matplotlib.pyplot as plt
+import matplotlib.transforms as transforms
 from matplotlib.backends.backend_pdf import PdfPages
 import re
 
@@ -66,32 +67,52 @@ def main(args):
     
     dict_m_letter = {'m2': "-2", 'm': "-1", '0': "0", 'p': "1", 'p2': "2"}
     dict_l_letter = {'s': "0", 'p': "1", 'd':"2"}
+    dict_l_capital_letter = {'s': "S", 'p': "P", 'd':"D"}
+    dict_parity = {'p': '+', 'm':'-'}
 
     # get amplitudes names
     amp_list = [col for col in best_df.columns if col.endswith("@int")]
     amp_list = [amp for amp in amp_list if amp[0]!='t'] # drop the 'total@int'
     amp_list_to_plot = [amp for amp in amp_list if amp[0]=='p'] # only extract positive reflectivity amp
+    wave_list_to_plot = [amp for amp in amp_list if amp[0].isdigit()] # refl and spin-projection is added together
+    
+    phase_diff = [col for col in best_df.columns if col.endswith("@phase")]
+    phase_diff_to_plot = [item for item in phase_diff if item[-7]=='p'] # only extract positive reflectivity amp
+
+
     with PdfPages(out_file) as pdf:
-        for amp in amp_list_to_plot: #p1pms or p2pm2d
+        for amp in amp_list_to_plot: #p1pms or p2pm2d; p1ps or p2pd (m are combined)
             J_value = int(amp[1])
-            if amp[4].isdigit(): # p2pm2d J>2
-                M_value = int(dict_m_letter[amp[3:5]])
-                L_value = int(dict_l_letter[amp[5]])
-            else: # p1pms
-                M_value = int(dict_m_letter[amp[3]])
-                L_value = int(dict_l_letter[amp[4]])
+            if len(amp)==8: # p1ps@int or p2pd@int
+                combined_waves = True
+                L_value = int(dict_l_letter[amp[3]])
+            else:
+                combined_waves = False
+                if amp[4].isdigit(): # p2pm2d J>2
+                    M_value = int(dict_m_letter[amp[3:5]])
+                    L_value = int(dict_l_letter[amp[5]])
+                else: # p1pms
+                    M_value = int(dict_m_letter[amp[3]])
+                    L_value = int(dict_l_letter[amp[4]])
             
             neg_amp = list(amp)
             neg_amp[0]='m'
             neg_amp=''.join(neg_amp)
 
             # plot acceptance corrected intensity
-            print(f"Plotting: best J={J_value} M={M_value} L={L_value} @acc histogram")
+            if combined_waves:
+                print(f"Plotting: best J={J_value} L={L_value} @acc histogram")
+            else:
+                print(f"Plotting: best J={J_value} M={M_value} L={L_value} @acc histogram")
             plt.figure(figsize=(10, 6))
+            fig, ax = plt.subplots()
             plt.errorbar(best_df['center'], best_df[amp + "@acc"], best_df[amp + "@acc@err"], color='red', fmt='o', label='+ Reflectivity')
             plt.errorbar(best_df['center'], best_df[neg_amp + "@acc"], best_df[neg_amp + "@acc@err"], color='blue', fmt='o', label='- Reflectivity')
             plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int@acc'], histtype='step', color='black', label="Total")
-            plt.title(f"J = {J_value} M = {M_value} L={L_value}")        
+            if combined_waves:
+                plt.title(f"J = {J_value} L={L_value}")
+            else:
+                plt.title(f"J = {J_value} M = {M_value} L={L_value}")
             plt.ylabel("Acceptance Corrected Intensity")
             plt.ylim(ymin=0)
             plt.legend()
@@ -99,22 +120,107 @@ def main(args):
             plt.close()
             
             # plot intensity
-            print(f"Plotting: best J={J_value} M={M_value} L={L_value} histogram")
+            if combined_waves:
+                print(f"Plotting: best J={J_value} L={L_value} histogram")
+            else:
+                print(f"Plotting: best J={J_value} M={M_value} L={L_value} histogram")
             plt.figure(figsize=(10, 6))
+            fig, ax = plt.subplots()
             plt.errorbar(best_df['center'], best_df[amp], best_df[amp + "@err"], color='red', fmt='o', label='+ Reflectivity')
             plt.errorbar(best_df['center'], best_df[neg_amp], best_df[neg_amp + "@err"], color='blue', fmt='o', label='- Reflectivity')
             plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int'], histtype='step', color='black', label="Total")
-            plt.title(f"J = {J_value} M = {M_value} L={L_value}")                
+            if combined_waves:
+                plt.title(f"J = {J_value} L={L_value}")
+            else:
+                plt.title(f"J = {J_value} M = {M_value} L={L_value}")
+            plt.ylabel("Acceptance Corrected Intensity")          
             plt.ylabel("Intensity")
             plt.ylim(ymin=0)
             plt.legend()
             pdf.savefig()
             plt.close()
 
+        # add all refl and spin-projection
+        # plot acceptance corrected intensity
+        plt.figure(figsize=(10, 6))
+        fig, ax = plt.subplots()
+        for wave in wave_list_to_plot: #1ps or 1pd; (refl and m are combined)
+            J_value = int(wave[0])
+            L_value = int(dict_l_letter[wave[2]])
+            plt.errorbar(best_df['center'], best_df[wave], best_df[wave + "@err"], fmt='o', label=f"J = {J_value} L={L_value}")
+        plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int'], histtype='step', color='black', label="Total")
+        plt.ylabel("Intensity")
+        plt.ylim(ymin=0)
+        plt.legend()
+        pdf.savefig()
+        plt.close()
+
+        # plot intensity
+        plt.figure(figsize=(10, 6))
+        fig, ax = plt.subplots()
+        for wave in wave_list_to_plot: #1ps or 1pd; (refl and m are combined)
+            J_value = int(wave[0])
+            L_value = int(dict_l_letter[wave[2]])
+            plt.errorbar(best_df['center'], best_df[wave + "@acc"], best_df[wave + "@acc@err"], fmt='o', label=f"J = {J_value} L={L_value}")
+        plt.hist(best_df['center'], bins=study['edges'], weights=best_df['total@int@acc'], histtype='step', color='black', label="Total")
+        plt.ylabel("Acceptance Corrected Intensity")
+        plt.ylim(ymin=0)
+        plt.legend()
+        pdf.savefig()
+        plt.close()
+
+        # phase difference
+        for pos_refl_item in phase_diff_to_plot: # wave1::wave2@refl_p@phase
+            wave1 = pos_refl_item.split('::')[0]
+            wave2 = pos_refl_item.split('::')[1].split('@')[0]
+            J1_spin = wave1[0]
+            J2_spin = wave2[0]
+            L1_value = dict_l_capital_letter[wave1[-1]]
+            L2_value = dict_l_capital_letter[wave2[-1]]
+            parity1 = dict_parity[wave1[1]]
+            parity2 = dict_parity[wave2[1]]
+            if wave1[3].isdigit(): # 2pm2d J>2
+                M1_value = int(dict_m_letter[wave1[2:4]])
+            else: # 1pms
+                M1_value = int(dict_m_letter[wave1[2]])
+            if wave2[3].isdigit(): # 2pm2d J>2
+                M2_value = int(dict_m_letter[wave2[2:4]])
+            else: # 1pms
+                M2_value = int(dict_m_letter[wave2[2]])
+
+            neg_refl_item = list(pos_refl_item)
+            neg_refl_item[-7]='m'
+            neg_refl_item=''.join(neg_refl_item)
+
+            print(f'Plotting: {pos_refl_item} phase difference plot')
+            plt.figure(figsize=(10, 6))
+            fig, ax = plt.subplots()
+            plt.errorbar(best_df['center'], best_df[pos_refl_item], best_df[pos_refl_item + "@err"], color='red', fmt='o', label='+ Reflectivity')
+            plt.errorbar(best_df['center'], best_df[neg_refl_item], best_df[neg_refl_item + "@err"], color='blue', fmt='o', label='- Reflectivity')
+            plt.axhline(y = np.pi/2, color = 'g', linestyle = 'dashed')
+            plt.axhline(y = np.pi, color = 'g', linestyle = 'solid')
+            plt.axhline(y = -np.pi/2, color = 'g', linestyle = 'dashed')
+            plt.axhline(y = -np.pi, color = 'g', linestyle = 'solid')
+            #trans = transforms.blended_transform_factory(ax.get_yticklabels()[0].get_transform(), ax.transData)
+            ax.text(best_df['center'].iloc[-1]+0.1, np.pi/2, r'$\frac{\pi}{2}$', color="green", ha="right", va="center", fontsize=15)
+            ax.text(best_df['center'].iloc[-1]+0.1, np.pi, r'$\pi$', color="green", ha="right", va="center", fontsize=15)
+            ax.text(best_df['center'].iloc[-1]+0.1, -np.pi/2, r'$-\frac{\pi}{2}$', color="green", ha="right", va="center", fontsize=15)
+            ax.text(best_df['center'].iloc[-1]+0.1, -np.pi, r'$-\pi$', color="green", ha="right", va="center", fontsize=15)
+            #plt.title(f"Phase difference between J={J1_spin},L={L1_value},M={M1_value} and J={J2_spin},L={L2_value},M={M2_value}")
+            plt.title(rf"Phase difference between ${J1_spin}^{parity1}{L1_value}_{ {M1_value}}$ and ${J2_spin}^{parity2}{L2_value}_{ {M2_value}}$")
+            plt.ylabel("Phase difference")
+            plt.ylim(ymin=-4)
+            plt.ylim(ymax=4)
+            plt.legend()
+            pdf.savefig()
+            plt.close()
+
+
         # violin plot
         for amp_m in amp_list:
             print(f"Plotting: {amp_m} violin plot")
             plt.figure(figsize=(10, 6))
+            fig, ax = plt.subplots()
             data = [bin_df[amp_m + "@acc"].to_numpy() for bin_df in bin_dfs]
             for i, sub_data in enumerate(data):
                 if sub_data.size == 0: # all fits failed:
@@ -130,17 +236,17 @@ def main(args):
             pdf.savefig()
             plt.close()
 
-        # phase plot    
-        for amp_m in amp_list:
-            print(f"Plotting: {amp_m} phase plot")
-            plt.figure(figsize=(10, 6))
-            amp_name = amp_m.replace("@int", "@amp")
-            plt.scatter(best_df["center"], np.abs(np.angle(best_df[amp_name])))
-            plt.title(amp_m + " Phase")
-            # plt.ylim(-np.pi, np.pi)
-            plt.ylim(0, np.pi) # only the phase difference matters maybe?
-            pdf.savefig()
-            plt.close()
+        # # phase plot    
+        # for amp_m in amp_list:
+        #     print(f"Plotting: {amp_m} phase plot")
+        #     plt.figure(figsize=(10, 6))
+        #     amp_name = amp_m.replace("@int", "@amp")
+        #     plt.scatter(best_df["center"], np.abs(np.angle(best_df[amp_name])))
+        #     plt.title(amp_m + " Phase")
+        #     # plt.ylim(-np.pi, np.pi)
+        #     plt.ylim(0, np.pi) # only the phase difference matters maybe?
+        #     pdf.savefig()
+        #     plt.close()
 
         # for i_bin in range(study['nbins']):
         #     bin_df = bin_dfs[i_bin]
@@ -175,6 +281,7 @@ def main(args):
         
         print("Plotting Likelihood Standard Deviation")
         plt.figure(figsize=(10, 6))
+        fig, ax = plt.subplots()
         data = np.array([[center, bin_df['likelihood'].std()] for center, bin_df in zip(centers, bin_dfs)])
         ax = plt.gca()
         ax.scatter(data[:,0], data[:,1])
