@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 import argparse
 from ampwrapper.utils import get_environment, BOLD, wrap, DEFAULT
-env_path = get_environment()
-parser = argparse.ArgumentParser()
 
 def main():
-    pass
+    env_path = get_environment()
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-env", "--env-path", action="store_true", help="print the present env path")
+    args = parser.parse_args()
+
+    if args.env_path:
+        print(f'The present env path is: {env_path}')
 
 if __name__ == "__main__":
     main()
