@@ -88,10 +88,11 @@ def main(args):
     out_string += f"reaction {reaction} {' '.join(particles)}\n"
 
     # Write Constants
-    out_string += "\n# Constants\n"
-    for pol, polval, polang in zip(pol_tags, pol_values, pol_angles):
-        out_string += f"define polVal{pol} {polval}\n"
-        out_string += f"define polAngle{pol} {polang}\n"
+    if args.add_pol_info:
+        out_string += "\n# Constants\n"
+        for pol, polval, polang in zip(pol_tags, pol_values, pol_angles):
+            out_string += f"define polVal{pol} {polval}\n"
+            out_string += f"define polAngle{pol} {polang}\n"
     
     # Write Parameters
     out_string += "\n# Parameters\n"
@@ -140,13 +141,14 @@ def main(args):
         out_string += f"{file_loop}\n"
         if args.phase1: out_string += "\n"
 
-    polang_loop = "loop LOOPPOLANG"
-    polval_loop = "loop LOOPPOLVAL"
-    for pol in pol_tags:
-        polang_loop += f" polAngle{pol}"
-        polval_loop += f" polVal{pol}"
-    out_string += f"{polang_loop}\n"
-    out_string += f"{polval_loop}\n"
+    if args.add_pol_info:
+        polang_loop = "loop LOOPPOLANG"
+        polval_loop = "loop LOOPPOLVAL"
+        for pol in pol_tags:
+            polang_loop += f" polAngle{pol}"
+            polval_loop += f" polVal{pol}"
+        out_string += f"{polang_loop}\n"
+        out_string += f"{polval_loop}\n"
 
     
     # Write Data Readers
@@ -302,7 +304,8 @@ def main(args):
                 out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} Vec_ps_refl"
                 out_string += f" {spin_J} {m_value:+} {l_value} {Imag_or_Real:+} {Sign_polarization:+}"
                 
-                out_string += " LOOPPOLANG LOOPPOLVAL"
+                if args.add_pol_info:
+                    out_string += " LOOPPOLANG LOOPPOLVAL"
                 out_string += "\n"
             
                 # if len(tag.split('@')) > 1:
@@ -346,7 +349,8 @@ def main(args):
                     out_string += f"::{spin_J}{parity_sign}{m_sign}{l_sign} Vec_ps_refl"
                     out_string += f" {spin_J} {m_value:+} {l_value} {Imag_or_Real:+} {Sign_polarization:+}"
                     
-                    out_string += " LOOPPOLANG LOOPPOLVAL"
+                    if args.add_pol_info:
+                        out_string += " LOOPPOLANG LOOPPOLVAL"
                     out_string += "\n"
 
     # Write Initialization
@@ -586,9 +590,16 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output', help="name for output configuration file")
     parser.add_argument('--amo', action="store_true", help="include amorphous runs")
     parser.add_argument('-n', '--name', help="reaction name", default="default")
-    parser.add_argument('--phase1', action="store_true", help="use all phase1 data")
+    parser.add_argument('--add-pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
+    parser.add_argument('--phase1', action="store_true", help="When the pol info is NOT included in the beam 4-vector, and use all GlueX Phase1 data")
     # parser.add_argument('--pol-files', action="store_true", help="use separate files for each polarization")
     # parser.add_argument('--add-pol-info', action="store_true", help="polarization information is NOT included in the ROOT file's beam photon four-vector")
     
     args = parser.parse_args()
+
+    if args.phase1:
+        if not args.add_pol_info:
+            print('If the option [--phase1] is turned on, the option [--add-pol-info] must be turned on at the same time!')
+            exit(2)
+
     main(args)
