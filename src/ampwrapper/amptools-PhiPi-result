@@ -14,20 +14,8 @@ from itertools import combinations
 
 
 def main(args, env):
-    # Validation
-    args.study, args.config = amputils.get_study_config(args.study, args.config)
-    print(amputils.DEFAULT(f"Initializing AmpTools fit on study {args.study} using {args.config} as the fit configuration"))
-    study = env['studies'][args.study]
-    fit_dir = Path(study['directory']) / args.config
-
-    # Collect results
-    res_path = Path(study['directory']) / f"{args.config}_results.csv"
-    res_path_best = Path(study['directory']) / f"{args.config}_results_best.csv"
-
-    dict_m_value = {'-2': "m2", '-1': "m", '0': "0", '1': "p", '2': "p2"}
-
+    
     df = pd.DataFrame()
-    polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config, args.phase1)]
     for i_bin in tqdm(range(study['nbins'])):
         print(f'Start to collect results from the {i_bin} bin.')
         bin_path = fit_dir / str(i_bin)
@@ -38,10 +26,15 @@ def main(args, env):
                 continue
             wrapper = FitResults.FitResultsWrapper(str(fit_path))
             amp_list = [s.decode().split("::", 1)[1] for s in wrapper.ampList()]
-            par_list = [s.decode() for s in wrapper.parNameList()]
+            amp_list = sorted(set(amp_list), key = amp_list.index) # remove duplicates caused by different polarization 
+                                                                   # amp: " RealPosSign::'wave' "
+            #par_list = [s.decode() for s in wrapper.parNameList()]
+
             res_dict = {"bin": i_bin, "iteration": it}
+            waveset_dict_spin_combine = {}
+            waveset_dict_refl_spin_combine = {}
             
-            # get intensity for each amplitude
+            #### get intensity for each amplitude
             for amp in amp_list:
                 # amp: " RealPosSign::'wave' "
                 # wave is "1pps", "1p0s", "1pms", "1ppd", "1p0d", "1pmd", "1mpp", "1m0p", "1mmp"
@@ -58,83 +51,94 @@ def main(args, env):
                 if 'RealPosSign' in amp:
                     pos_refl_waveName = 'p' + wave
                     neg_refl_waveName = 'm' + wave
-                    pos_refl_amps = ['RealNegSign','ImagPosSign']
-                    neg_refl_amps = ['RealPosSign','ImagNegSign']
-                    # if naturality: #natural
-                    #     pos_refl_amps = ['RealPosSign','ImagNegSign']
-                    #     neg_refl_amps = ['RealNegSign','ImagPosSign']
-                    # else: # unnatural
-                    #     pos_refl_amps = ['RealNegSign','ImagPosSign']
-                    #     neg_refl_amps = ['RealPosSign','ImagNegSign']
+                    
 
                     if polarizations:
                         pos_refl_waveSet = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', pos_refl_amps[0])}" for pol in polarizations]
                         pos_refl_waveSet.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', pos_refl_amps[1])}" for pol in polarizations])
-                        pos_refl_wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp.replace('RealPosSign', pos_refl_amps[0])}"
+                        #pos_refl_wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp.replace('RealPosSign', pos_refl_amps[0])}"
 
                         neg_refl_waveSet = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', neg_refl_amps[0])}" for pol in polarizations]
                         neg_refl_waveSet.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', neg_refl_amps[1])}" for pol in polarizations])
-                        neg_refl_wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp.replace('RealPosSign', neg_refl_amps[0])}"
+                        #neg_refl_wave_pol0 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::{amp.replace('RealPosSign', neg_refl_amps[0])}"
                     else:
                         pos_refl_waveSet = [f"{amputils.get_config_reaction(args.config)}::{amp.replace('RealPosSign', pos_refl_amps[0])}"]
                         pos_refl_waveSet.extend([f"{amputils.get_config_reaction(args.config)}::{amp.replace('RealPosSign', pos_refl_amps[1])}"])
-                        pos_refl_wave_pol0 = f"{amputils.get_config_reaction(args.config)}::{amp.replace('RealPosSign', pos_refl_amps[0])}"
+                        #pos_refl_wave_pol0 = f"{amputils.get_config_reaction(args.config)}::{amp.replace('RealPosSign', pos_refl_amps[0])}"
 
                         neg_refl_waveSet = [f"{amputils.get_config_reaction(args.config)}::{amp.replace('RealPosSign', neg_refl_amps[0])}"]
                         neg_refl_waveSet.extend([f"{amputils.get_config_reaction(args.config)}::{amp.replace('RealPosSign', neg_refl_amps[1])}"])
-                        neg_refl_wave_pol0 = f"{amputils.get_config_reaction(args.config)}::{amp.replace('RealPosSign', neg_refl_amps[0])}"
+                        #neg_refl_wave_pol0 = f"{amputils.get_config_reaction(args.config)}::{amp.replace('RealPosSign', neg_refl_amps[0])}"
 
                     res_dict[f"{pos_refl_waveName}@int"], res_dict[f"{pos_refl_waveName}@int@err"] = wrapper.intensity(pos_refl_waveSet, False)
                     res_dict[f"{pos_refl_waveName}@int@acc"], res_dict[f"{pos_refl_waveName}@int@acc@err"] = wrapper.intensity(pos_refl_waveSet, True)
-                    res_dict[f"{pos_refl_waveName}@amp"] = wrapper.productionParameter(pos_refl_wave_pol0)
+                    #res_dict[f"{pos_refl_waveName}@amp"] = wrapper.productionParameter(pos_refl_wave_pol0)
                     #res_dict[f"{pos_refl_waveName}@amp_scaled"] = wrapper.scaledProductionParameter(pos_refl_wave_pol0)
 
                     res_dict[f"{neg_refl_waveName}@int"], res_dict[f"{neg_refl_waveName}@int@err"] = wrapper.intensity(neg_refl_waveSet, False)
                     res_dict[f"{neg_refl_waveName}@int@acc"], res_dict[f"{neg_refl_waveName}@int@acc@err"] = wrapper.intensity(neg_refl_waveSet, True)
-                    res_dict[f"{neg_refl_waveName}@amp"] = wrapper.productionParameter(neg_refl_wave_pol0)
+                    #res_dict[f"{neg_refl_waveName}@amp"] = wrapper.productionParameter(neg_refl_wave_pol0)
                     #res_dict[f"{neg_refl_waveName}@amp_scaled"] = wrapper.scaledProductionParameter(neg_refl_wave_pol0)
 
+                    # combine amplitudes
+                    keyname = wave[0]+wave[1]+wave[3]
+                    # combine spin projection together;  1-P,1+S, 1+D
+                    combine_spinprojection(waveset_dict_spin_combine, keyname, amp)
+                    # combine reflectivity and spin-m
+                    combine_refl_spin(waveset_dict_refl_spin_combine, keyname, amp)
 
-            
-            # # combine some amplitudes together
-            # wave_list = [amp.split("::")[1].replace("AMP_", "") for amp in amp_list]
-            #     # wave format "J+M+L+Refelct"
-            # JL_pair_list = np.unique([[int(wave[0]), int(wave[4])] for wave in wave_list], axis=0)
-            
-            # for JL_pair in JL_pair_list:
-            #     J_value = JL_pair[0]
-            #     L_value = JL_pair[1]
-            #     wave_set = []
-            #     for amp in amp_list:
-            #         if 'Re' in amp:
-            #             # sum spin_projection M and Reflectivity
-            #             if int(amp.split("::")[1].replace("AMP_", "")[0]) == J_value and int(amp.split("::")[1].replace("AMP_", "")[4]) == L_value:
-            #                 wave = amp.split("::")[-1]
-            #                 wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp}" for pol in polarizations])
-            #                 wave_set.extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('Re', 'Im')}" for pol in polarizations])
-                
-            #     res_dict[f"J{J_value}L{L_value}@totint"], res_dict[f"J{J_value}L{L_value}@totint@err"] = wrapper.intensity(wave_set, False)
-            #     res_dict[f"J{J_value}L{L_value}@totint@acc"], res_dict[f"J{J_value}L{L_value}@totint@acc@err"] = wrapper.intensity(wave_set, True)
-            
+            for keyname in waveset_dict_spin_combine:
+                res_dict[keyname+"@int"], res_dict[keyname+"@int@err"] = wrapper.intensity(waveset_dict_spin_combine[keyname], False)
+                res_dict[keyname+"@int@acc"], res_dict[keyname+"@int@acc@err"] = wrapper.intensity(waveset_dict_spin_combine[keyname], True)
+            for keyname in waveset_dict_refl_spin_combine:
+                res_dict[keyname+"@int"], res_dict[keyname+"@int@err"] = wrapper.intensity(waveset_dict_refl_spin_combine[keyname], False)
+                res_dict[keyname+"@int@acc"], res_dict[keyname+"@int@acc@err"] = wrapper.intensity(waveset_dict_refl_spin_combine[keyname], True)
+
             res_dict["total@int"], res_dict["total@int@err"] = wrapper.total_intensity(False)
             res_dict["total@int@acc"], res_dict["total@int@acc@err"] = wrapper.total_intensity(True)
-            for par in par_list:
-                res_dict[par + "@par"] = wrapper.parValue(par)
-                res_dict[par + "@par@err"] = wrapper.parError(par)
+            
+            #### phase difference
+            # ## phase difference for the same wave with different spin projection e.g. 1pms vs 1pps
+            # JpL_pairs = [amp.split("::")[-1][0]+amp.split("::")[-1][1]+amp.split("::")[-1][-1] for amp in amp_list] # amp: " RealPosSign::'wave' "
+            # JpL_pairs = sorted(set(JpL_pairs), key = JpL_pairs.index) # remove duplicates
+            # phase_difference(res_dict, JpL_pairs, wrapper)
+
+            ## phase difference for difference wave e.g. 1pms vs 1mmp,  1pps vs 1mmp
+            wave_list = [amp.split("::")[-1] for amp in amp_list]
+            wave_list = sorted(set(wave_list), key = wave_list.index) # remove duplicates
+            # extract wave with unique phase. e.g. 1ps, 1pd have the same phase
+            unique_phase = {}
+            for wave in wave_list:
+                key = wave[:-1]
+                if key not in unique_phase:
+                    unique_phase[key] = wave
+            wave_list_unique_phase = list(unique_phase.values())
+            wave_pairs = combinations(wave_list_unique_phase, 2)
+            for wave1, wave2 in wave_pairs:
+                if polarizations:
+                    amp1 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::ImagPosSign::{wave1}"
+                    amp2 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::ImagPosSign::{wave2}"
+                    res_dict[f"{wave1}::{wave2}@refl_p@phase"], res_dict[f"{wave1}::{wave2}@refl_p@phase@err"] = normalize_phase_diff(wrapper.phaseDiff(amp1, amp2))
+                    res_dict[f"{wave1}::{wave2}@refl_m@phase"], res_dict[f"{wave1}::{wave2}@refl_m@phase@err"] = normalize_phase_diff(wrapper.phaseDiff(amp1.replace('ImagPosSign','ImagNegSign'), amp2.replace('ImagPosSign','ImagNegSign')))
+                else:
+                    amp1 = f"{amputils.get_config_reaction(args.config)}::ImagPosSign::{wave1}"
+                    amp2 = f"{amputils.get_config_reaction(args.config)}::ImagPosSign::{wave2}"
+                    res_dict[f"{wave1}::{wave2}@refl_p@phase"], res_dict[f"{wave1}::{wave2}@refl_p@phase@err"] = normalize_phase_diff(wrapper.phaseDiff(amp1, amp2))
+                    res_dict[f"{wave1}::{wave2}@refl_m@phase"], res_dict[f"{wave1}::{wave2}@refl_m@phase@err"] = normalize_phase_diff(wrapper.phaseDiff(amp1.replace('ImagPosSign','ImagNegSign'), amp2.replace('ImagPosSign','ImagNegSign')))
+
+
+            # for par in par_list:
+            #     res_dict[par + "@par"] = wrapper.parValue(par)
+            #     res_dict[par + "@par@err"] = wrapper.parError(par)
+            res_dict['dsratio'] = wrapper.parValue('dsratio')
+            res_dict['dsratio@err'] = wrapper.parError('dsratio')
             res_dict["likelihood"] = wrapper.likelihood()
 
-    
-            """
-            amp_pairs = combinations(amp_list, 2)
-            for amp1, amp2 in amp_pairs:
-                wave1 = amp1.split("::")[-1]
-                wave2 = amp2.split("::")[-1]
-                res_dict[f"{wave1}::{wave2}@phase"], res_dict[f"{wave1}::{wave2}@phase@err"] = wrapper.phaseDiff(amp1, amp2)
-            """
+            
             df = pd.concat([pd.DataFrame(res_dict, index=[0]), df], ignore_index=True)
     df.to_csv(res_path, index=False)
 
-    # save the best result to another file
+    #### save the best result to another file
     bin_dfs = [df.loc[df['bin'] == i_bin] for i_bin in range(study['nbins'])]
     best_df = pd.concat([bin_df[bin_df['likelihood'] == bin_df['likelihood'].min()] for bin_df in bin_dfs])
     best_df = best_df.drop_duplicates(subset=['bin']) # in case two fits end up in the exact same place
@@ -152,6 +156,61 @@ def main(args, env):
         json.dump(env, env_file, indent=4)
 
 
+def combine_spinprojection(waveset_dict, keyname, amp):
+    if "p"+keyname in waveset_dict:
+        waveset_dict["p"+keyname].extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', pos_refl_amps[0])}" for pol in polarizations])
+        waveset_dict["p"+keyname].extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', pos_refl_amps[1])}" for pol in polarizations])
+    else:
+        waveset_dict["p"+keyname] = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', pos_refl_amps[0])}" for pol in polarizations]
+        waveset_dict["p"+keyname].extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', pos_refl_amps[1])}" for pol in polarizations])
+
+    if "m"+keyname in waveset_dict:
+        waveset_dict["m"+keyname].extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', neg_refl_amps[0])}" for pol in polarizations])
+        waveset_dict["m"+keyname].extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', neg_refl_amps[1])}" for pol in polarizations])
+    else:
+        waveset_dict["m"+keyname] = [f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', neg_refl_amps[0])}" for pol in polarizations]
+        waveset_dict["m"+keyname].extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', neg_refl_amps[1])}" for pol in polarizations])
+
+def combine_refl_spin(waveset_dict, keyname, amp):
+    if keyname in waveset_dict:
+        for each_amp in refl_amps:
+            waveset_dict[keyname].extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', each_amp)}" for pol in polarizations])
+    else:
+        waveset_dict[keyname] = ([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', refl_amps[0])}" for pol in polarizations])
+        for amp_i in range(1,4):
+            waveset_dict[keyname].extend([f"{amputils.get_config_reaction(args.config)}{pol}::{amp.replace('RealPosSign', refl_amps[amp_i])}" for pol in polarizations])
+
+# def phase_difference(res_dict, JpL_pairs, wrapper):
+#     for JpL in JpL_pairs: 
+#         spin_J = int(JpL[0])
+#         parity = JpL[1]
+#         L = JpL[2]
+#         for spin_projection_m in range(1,spin_J+1):# m [1,J]
+#             if spin_projection_m == 1:
+#                 wave1 = str(spin_J)+parity+'p'+L # m=+1
+#                 wave2 = str(spin_J)+parity+'m'+L # m=-1
+#             else:
+#                 wave1 = str(spin_J)+parity+'p'+str(spin_projection_m)+L # positive reflectivity m=+2 ..
+#                 wave2 = str(spin_J)+parity+'m'+str(spin_projection_m)+L # positive reflectivity m=-2 ..
+#             amp1 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::ImagPosSign::{wave1}"
+#             amp2 = f"{amputils.get_config_reaction(args.config)}{polarizations[0]}::ImagPosSign::{wave2}"
+#             res_dict[f"{wave1}::{wave2}@refl_p@phase"], res_dict[f"{wave1}::{wave2}@refl_p@phase@err"] = normalize_phase_diff(wrapper.phaseDiff(amp1, amp2))
+#             res_dict[f"{wave1}::{wave2}@refl_m@phase"], res_dict[f"{wave1}::{wave2}@refl_m@phase@err"] = normalize_phase_diff(wrapper.phaseDiff(amp1.replace('ImagPosSign','ImagNegSign'), amp2.replace('ImagPosSign','ImagNegSign')))
+
+#     # # compare phase difference between 1+S and 1-P
+#     # if '1ps' in JpL_pairs and '1mp' in JpL_pairs:
+#     #     for spin_projection_m in range(-1,2):
+#     #         wave1 = '1ps
+    
+def normalize_phase_diff(phase_diff):
+    num_pi = int(phase_diff[0]/(2*np.pi))
+    norm_phase_diff = phase_diff[0] - num_pi * 2*np.pi
+    while norm_phase_diff > np.pi:
+        norm_phase_diff -= 2*np.pi
+    while norm_phase_diff < -np.pi:
+        norm_phase_diff += 2*np.pi
+
+    return norm_phase_diff, phase_diff[1]
 
 
 if __name__ == "__main__":
@@ -167,11 +226,27 @@ if __name__ == "__main__":
     study_keys = list(env['studies'].keys())
 
     parser = argparse.ArgumentParser()
-
     parser.add_argument("-s", "--study", choices=study_keys, help="name of AmpTools study to fit")
     parser.add_argument("-c", "--config", choices=config_keys, help="name of AmpTools config to use in fit")
-    parser.add_argument("--phase1", action="store_true", help="use all phase1 data")
-    
+    parser.add_argument("--phase1", action="store_true", help="When the pol info is NOT included in the beam 4-vector, and use all GlueX Phase1 data")
     args = parser.parse_args()
+
+    # Validation
+    args.study, args.config = amputils.get_study_config(args.study, args.config)
+    print(amputils.DEFAULT(f"Initializing AmpTools fit on study {args.study} using {args.config} as the fit configuration"))
+    study = env['studies'][args.study]
+    fit_dir = Path(study['directory']) / args.config
+
+    # Collect results
+    res_path = Path(study['directory']) / f"{args.config}_results.csv"
+    res_path_best = Path(study['directory']) / f"{args.config}_results_best.csv"
+
+    polarizations = [f"_{pol}" for pol in amputils.get_config_pols(args.config, args.phase1)]
+    
+    dict_m_value = {'-2': "m2", '-1': "m", '0': "0", '1': "p", '2': "p2"}
+
+    pos_refl_amps = ['RealNegSign','ImagPosSign']
+    neg_refl_amps = ['RealPosSign','ImagNegSign']
+    refl_amps = ['RealNegSign','ImagPosSign','RealPosSign','ImagNegSign']
 
     main(args, env)
